@@ -22,14 +22,7 @@ import {
   Phone,
   User,
   MapPin,
-  QrCode,
-  Smartphone,
-  Building2,
-  Lock,
 } from 'lucide-react';
-
-const STORE_UPI_ID = 'vilaksh.peddi@ybl';
-const STORE_NAME = 'Deepa Vathulu Store';
 
 interface Product {
   id: string;
@@ -140,15 +133,6 @@ export default function Home() {
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState<string | null>(null);
 
-  // In-App Razorpay Gateway Modal States
-  const [isRazorpayModalOpen, setIsRazorpayModalOpen] = useState(false);
-  const [selectedRzpTab, setSelectedRzpTab] = useState<'upi' | 'card' | 'netbanking'>('upi');
-  const [upiIdInput, setUpiIdInput] = useState(STORE_UPI_ID);
-  const [cardNumberInput, setCardNumberInput] = useState('');
-  const [cardExpiryInput, setCardExpiryInput] = useState('');
-  const [cardCvvInput, setCardCvvInput] = useState('');
-  const [isProcessingRzp, setIsProcessingRzp] = useState(false);
-
   useEffect(() => {
     fetchProducts();
     loadRazorpayScript();
@@ -230,7 +214,7 @@ export default function Home() {
 
     try {
       const refId = paymentRef || `pay_rzp_${Date.now()}`;
-      const orderMethodLabel = paymentMethod === 'razorpay' ? `razorpay (${selectedRzpTab})` : 'Cash on Delivery';
+      const orderMethodLabel = paymentMethod === 'razorpay' ? 'razorpay' : 'Cash on Delivery';
 
       const fullPayload: Record<string, any> = {
         id: newOrderId,
@@ -298,7 +282,6 @@ export default function Home() {
       setCustomerName('');
       setCustomerPhone('');
       setShippingAddress('');
-      setIsRazorpayModalOpen(false);
       setIsCartOpen(false);
     } catch (err: any) {
       console.error('Unexpected Checkout Error:', err);
@@ -321,83 +304,79 @@ export default function Home() {
       setIsCheckingOut(true);
       const isLoaded = await loadRazorpayScript();
 
-      if (isLoaded && (window as any).Razorpay) {
+      if (!isLoaded || !(window as any).Razorpay) {
+        alert('Razorpay Checkout SDK failed to load. Please check internet connection.');
+        setIsCheckingOut(false);
+        return;
+      }
+
+      try {
+        let orderData: any = null;
         try {
           const res = await fetch('/api/razorpay/order', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ amount: totalCartPrice }),
           });
-
-          let orderData: any = null;
           if (res.ok) {
             orderData = await res.json();
           }
-
-          const options: any = {
-            key: orderData?.key || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TPkwm1YUrt2Sp8',
-            amount: orderData?.amount || Math.round(totalCartPrice * 100),
-            currency: orderData?.currency || 'INR',
-            name: 'Deepa Vathulu Store',
-            description: 'Order Payment',
-            prefill: {
-              name: customerName,
-              contact: customerPhone,
-            },
-            theme: {
-              color: '#D97706',
-            },
-            handler: function (response: any) {
-              console.log('Razorpay Standard Checkout Success:', response);
-              const payId = response?.razorpay_payment_id || `pay_rzp_${Date.now()}`;
-              processOrderCreation('paid', payId);
-            },
-            modal: {
-              ondismiss: function () {
-                setIsCheckingOut(false);
-              },
-            },
-          };
-
-          if (orderData?.id && !orderData?.is_fallback) {
-            options.order_id = orderData.id;
-          }
-
-          const rzp = new (window as any).Razorpay(options);
-
-          rzp.on('payment.failed', function (response: any) {
-            console.warn('Razorpay SDK payment error, falling back to Native Gateway Modal:', response);
-            setIsCheckingOut(false);
-            setIsRazorpayModalOpen(true);
-          });
-
-          rzp.open();
         } catch (err) {
-          console.warn('Razorpay SDK open error, using Native Gateway Modal:', err);
-          setIsCheckingOut(false);
-          setIsRazorpayModalOpen(true);
+          console.warn('Could not fetch order from API route, proceeding with client options:', err);
         }
-      } else {
+
+        const razorpayKey =
+          orderData?.key ||
+          process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ||
+          'rzp_live_TPkwm1YUrt2Sp8';
+
+        const options: any = {
+          key: razorpayKey,
+          amount: Math.round(totalCartPrice * 100),
+          currency: 'INR',
+          name: 'Deepa Vathulu Store',
+          description: 'Pure Sacred Cotton Wicks Order',
+          prefill: {
+            name: customerName,
+            contact: customerPhone,
+          },
+          theme: {
+            color: '#D97706',
+          },
+          handler: function (response: any) {
+            console.log('Razorpay Official Standard Modal Payment Success:', response);
+            const payId = response?.razorpay_payment_id || `pay_rzp_${Date.now()}`;
+            processOrderCreation('paid', payId);
+          },
+          modal: {
+            ondismiss: function () {
+              setIsCheckingOut(false);
+            },
+          },
+        };
+
+        if (orderData?.id && !orderData?.is_fallback) {
+          options.order_id = orderData.id;
+        }
+
+        const rzp = new (window as any).Razorpay(options);
+
+        rzp.on('payment.failed', function (response: any) {
+          console.warn('Razorpay Payment Failed or Cancelled:', response);
+          alert(`Payment Status: ${response?.error?.description || 'Payment was not completed'}`);
+          setIsCheckingOut(false);
+        });
+
+        rzp.open();
+      } catch (err: any) {
+        console.error('Error launching official Razorpay modal:', err);
+        alert(`Razorpay Error: ${err?.message || 'Failed to open Razorpay payment modal'}`);
         setIsCheckingOut(false);
-        setIsRazorpayModalOpen(true);
       }
     } else {
       await processOrderCreation('unpaid', 'COD');
     }
   };
-
-  const handleRazorpayPaymentPay = async () => {
-    setIsProcessingRzp(true);
-    setTimeout(async () => {
-      setIsProcessingRzp(false);
-      const generatedPayId = `pay_rzp_live_${Math.floor(100000000 + Math.random() * 900000000)}`;
-      await processOrderCreation('paid', generatedPayId);
-    }, 1000);
-  };
-
-  // Generate dynamic scannable UPI QR URL for vilaksh.peddi@ybl
-  const upiDeepLink = `upi://pay?pa=${encodeURIComponent(upiIdInput)}&pn=${encodeURIComponent(STORE_NAME)}&am=${totalCartPrice}&cu=INR`;
-  const upiQrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(upiDeepLink)}`;
 
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 font-sans selection:bg-amber-500 selection:text-stone-950">
@@ -826,191 +805,6 @@ export default function Home() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Razorpay In-App Payment Gateway Modal */}
-      {isRazorpayModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md">
-          <div className="bg-stone-900 border border-stone-800 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl relative">
-            {/* Razorpay Modal Header */}
-            <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 p-5 text-stone-950 relative">
-              <button
-                onClick={() => setIsRazorpayModalOpen(false)}
-                className="absolute top-4 right-4 text-stone-950 hover:opacity-75 font-bold p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="flex items-center gap-2 mb-1">
-                <Lock className="w-4 h-4" />
-                <span className="text-[11px] font-extrabold uppercase tracking-widest">Razorpay Secure Checkout</span>
-              </div>
-              <h3 className="text-xl font-black">Deepa Vathulu Store</h3>
-              <p className="text-xs font-semibold opacity-90 mt-0.5">Order Payment • Live Mode</p>
-            </div>
-
-            {/* Total Amount Card */}
-            <div className="p-5 bg-stone-950 border-b border-stone-800 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] text-stone-400 uppercase tracking-widest block font-medium">Amount to Pay</span>
-                <span className="text-2xl font-black text-amber-400">₹{totalCartPrice.toLocaleString()}</span>
-              </div>
-              <div className="px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-400 text-xs font-bold">
-                UPI: vilaksh.peddi@ybl
-              </div>
-            </div>
-
-            {/* Payment Method Tabs */}
-            <div className="p-5 space-y-4">
-              <div className="grid grid-cols-3 gap-2 bg-stone-950 p-1 rounded-xl border border-stone-800">
-                <button
-                  type="button"
-                  onClick={() => setSelectedRzpTab('upi')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedRzpTab === 'upi'
-                      ? 'bg-amber-500 text-stone-950 shadow-md'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                >
-                  <QrCode className="w-3.5 h-3.5" />
-                  <span>UPI / QR</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedRzpTab('card')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedRzpTab === 'card'
-                      ? 'bg-amber-500 text-stone-950 shadow-md'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                >
-                  <CreditCard className="w-3.5 h-3.5" />
-                  <span>Card</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedRzpTab('netbanking')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedRzpTab === 'netbanking'
-                      ? 'bg-amber-500 text-stone-950 shadow-md'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>Banking</span>
-                </button>
-              </div>
-
-              {/* Tab Content: UPI */}
-              {selectedRzpTab === 'upi' && (
-                <div className="space-y-4 py-2">
-                  <div className="bg-stone-950 border border-stone-800 rounded-2xl p-4 text-center">
-                    <div className="w-48 h-48 bg-white p-2.5 rounded-2xl mx-auto mb-3 shadow-lg flex items-center justify-center">
-                      <img
-                        src={upiQrImageUrl}
-                        alt="Scan UPI QR Code to Pay"
-                        className="w-full h-full object-contain rounded-xl"
-                      />
-                    </div>
-                    <span className="text-xs font-semibold text-stone-200 block">Scan QR using Google Pay, PhonePe, Paytm, BHIM</span>
-                    <span className="text-[11px] text-amber-400 font-mono font-bold block mt-1">UPI ID: {upiIdInput}</span>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-stone-400 block">Store Merchant UPI ID / VPA</label>
-                    <div className="relative">
-                      <Smartphone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
-                      <input
-                        type="text"
-                        value={upiIdInput}
-                        onChange={(e) => setUpiIdInput(e.target.value)}
-                        placeholder="vilaksh.peddi@ybl"
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-stone-200 focus:outline-none focus:border-amber-500 font-mono"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab Content: Card */}
-              {selectedRzpTab === 'card' && (
-                <div className="space-y-3 py-2">
-                  <div>
-                    <label className="text-xs font-semibold text-stone-400 block mb-1">Card Number</label>
-                    <input
-                      type="text"
-                      value={cardNumberInput}
-                      onChange={(e) => setCardNumberInput(e.target.value)}
-                      placeholder="4111 1111 1111 1111"
-                      className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3 py-2.5 text-xs text-stone-200 focus:outline-none focus:border-amber-500 font-mono"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs font-semibold text-stone-400 block mb-1">Expiry (MM/YY)</label>
-                      <input
-                        type="text"
-                        value={cardExpiryInput}
-                        onChange={(e) => setCardExpiryInput(e.target.value)}
-                        placeholder="12/28"
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3 py-2.5 text-xs text-stone-200 focus:outline-none focus:border-amber-500 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-semibold text-stone-400 block mb-1">CVV</label>
-                      <input
-                        type="password"
-                        value={cardCvvInput}
-                        onChange={(e) => setCardCvvInput(e.target.value)}
-                        placeholder="123"
-                        maxLength={4}
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3 py-2.5 text-xs text-stone-200 focus:outline-none focus:border-amber-500 font-mono"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab Content: Netbanking */}
-              {selectedRzpTab === 'netbanking' && (
-                <div className="py-2 space-y-2">
-                  <span className="text-xs font-semibold text-stone-400 block mb-2">Select Bank</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    {['SBI Bank', 'HDFC Bank', 'ICICI Bank', 'Axis Bank'].map((bank) => (
-                      <div
-                        key={bank}
-                        className="p-3 bg-stone-950 border border-stone-800 hover:border-amber-500/50 rounded-xl text-center cursor-pointer transition-all"
-                      >
-                        <Building2 className="w-5 h-5 text-amber-400 mx-auto mb-1" />
-                        <span className="text-xs font-semibold text-stone-200">{bank}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Pay Button */}
-              <button
-                type="button"
-                onClick={handleRazorpayPaymentPay}
-                disabled={isProcessingRzp}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black text-sm shadow-xl shadow-amber-600/25 transition-all flex items-center justify-center gap-2"
-              >
-                {isProcessingRzp ? (
-                  <span>Authenticating Payment...</span>
-                ) : (
-                  <>
-                    <span>Pay ₹{totalCartPrice.toLocaleString()} via Razorpay</span>
-                    <ChevronRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
             </div>
           </div>
         </div>
