@@ -1,0 +1,8 @@
+{
+  "name": "deepa-vathulu",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
