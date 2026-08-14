@@ -318,7 +318,69 @@ export default function Home() {
     }
 
     if (paymentMethod === 'razorpay') {
-      setIsRazorpayModalOpen(true);
+      setIsCheckingOut(true);
+      const isLoaded = await loadRazorpayScript();
+
+      if (isLoaded && (window as any).Razorpay) {
+        try {
+          const res = await fetch('/api/razorpay/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount: totalCartPrice }),
+          });
+
+          let orderData: any = null;
+          if (res.ok) {
+            orderData = await res.json();
+          }
+
+          const options: any = {
+            key: orderData?.key || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TPkwm1YUrt2Sp8',
+            amount: orderData?.amount || Math.round(totalCartPrice * 100),
+            currency: orderData?.currency || 'INR',
+            name: 'Deepa Vathulu Store',
+            description: 'Order Payment',
+            prefill: {
+              name: customerName,
+              contact: customerPhone,
+            },
+            theme: {
+              color: '#D97706',
+            },
+            handler: function (response: any) {
+              console.log('Razorpay Standard Checkout Success:', response);
+              const payId = response?.razorpay_payment_id || `pay_rzp_${Date.now()}`;
+              processOrderCreation('paid', payId);
+            },
+            modal: {
+              ondismiss: function () {
+                setIsCheckingOut(false);
+              },
+            },
+          };
+
+          if (orderData?.id && !orderData?.is_fallback) {
+            options.order_id = orderData.id;
+          }
+
+          const rzp = new (window as any).Razorpay(options);
+
+          rzp.on('payment.failed', function (response: any) {
+            console.warn('Razorpay SDK payment error, falling back to Native Gateway Modal:', response);
+            setIsCheckingOut(false);
+            setIsRazorpayModalOpen(true);
+          });
+
+          rzp.open();
+        } catch (err) {
+          console.warn('Razorpay SDK open error, using Native Gateway Modal:', err);
+          setIsCheckingOut(false);
+          setIsRazorpayModalOpen(true);
+        }
+      } else {
+        setIsCheckingOut(false);
+        setIsRazorpayModalOpen(true);
+      }
     } else {
       await processOrderCreation('unpaid', 'COD');
     }
@@ -769,7 +831,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Razorpay Native Payment Gateway Modal (Restored Original Preferred Amber Layout) */}
+      {/* Razorpay In-App Payment Gateway Modal */}
       {isRazorpayModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md">
           <div className="bg-stone-900 border border-stone-800 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl relative">
@@ -787,7 +849,7 @@ export default function Home() {
                 <span className="text-[11px] font-extrabold uppercase tracking-widest">Razorpay Secure Checkout</span>
               </div>
               <h3 className="text-xl font-black">Deepa Vathulu Store</h3>
-              <p className="text-xs font-semibold opacity-90 mt-0.5">Order Payment • Test Mode</p>
+              <p className="text-xs font-semibold opacity-90 mt-0.5">Order Payment • Live Mode</p>
             </div>
 
             {/* Total Amount Card */}

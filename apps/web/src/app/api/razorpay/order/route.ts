@@ -10,8 +10,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Valid amount is required' }, { status: 400 });
     }
 
-    const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_TPd7dedDuI5Alb';
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || 'm4eNcu05IDXnpB7EbFLFY4Au';
+    const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TPkwm1YUrt2Sp8';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || 'PSnOBOvB17ItW7EW0L29Pfg3';
     const amountInPaise = Math.round(rawAmount * 100);
 
     try {
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
     } catch (rzpError: any) {
       console.warn('Razorpay API order creation warning:', rzpError?.error || rzpError?.message);
       
-      const generatedOrderId = `order_test_${Math.floor(10000000 + Math.random() * 90000000)}`;
+      const generatedOrderId = `order_live_${Math.floor(10000000 + Math.random() * 90000000)}`;
       return NextResponse.json({
         success: true,
         id: generatedOrderId,
