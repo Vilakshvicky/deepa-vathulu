@@ -51,6 +51,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Handcrafted terracotta diyas paired with pure hand-rolled cotton wicks for daily pooja.',
     tag: 'Best Seller',
     stock: 50,
+    image_url: 'https://images.unsplash.com/photo-1605371924599-2d0365da1ae0?w=600&q=80',
   },
   {
     id: '2',
@@ -61,6 +62,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Specially shaped multi-wick cotton wicks designed for 5-face deepam lighting.',
     tag: 'Sacred Quality',
     stock: 45,
+    image_url: 'https://images.unsplash.com/photo-1602607414963-39a7e6b77c50?w=600&q=80',
   },
   {
     id: '3',
@@ -71,6 +73,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Ready-to-use ghee wicks crafted from pure cow ghee and organic cotton.',
     tag: 'Eco Friendly',
     stock: 100,
+    image_url: 'https://images.unsplash.com/photo-1545205597-3d9d02c29597?w=600&q=80',
   },
   {
     id: '4',
@@ -81,6 +84,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Extra thick long-burning organic cotton wicks crafted for continuous Akhanda deepams.',
     tag: 'Long Burning',
     stock: 25,
+    image_url: 'https://images.unsplash.com/photo-1574634534894-89d7576c8259?w=600&q=80',
   },
   {
     id: '5',
@@ -91,6 +95,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Complete hamper containing assorted flower wicks, long wicks, ghee wicks & clay diyas.',
     tag: 'Gift Special',
     stock: 30,
+    image_url: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=600&q=80',
   },
   {
     id: '6',
@@ -101,6 +106,7 @@ const SAMPLE_PRODUCTS: Product[] = [
     description: 'Round lotus-shaped flower cotton wicks for temple and home oil deepams.',
     tag: 'Popular',
     stock: 60,
+    image_url: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=600&q=80',
   },
 ];
 
