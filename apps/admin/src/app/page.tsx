@@ -81,21 +81,11 @@ export default function AdminDashboard() {
   const [editingStockId, setEditingStockId] = useState<string | null>(null);
   const [tempStockValue, setTempStockValue] = useState<number>(0);
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const storedAuth = sessionStorage.getItem('admin_authenticated');
-      if (storedAuth === 'true') {
-        setIsAuthenticated(true);
-      }
-    }
-  }, []);
-
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (pinInput === DEFAULT_ADMIN_PIN || pinInput === '0916') {
       setIsAuthenticated(true);
       setPinError(false);
-      sessionStorage.setItem('admin_authenticated', 'true');
     } else {
       setPinError(true);
       setPinInput('');
@@ -104,7 +94,6 @@ export default function AdminDashboard() {
 
   const handleLogout = () => {
     setIsAuthenticated(false);
-    sessionStorage.removeItem('admin_authenticated');
     setPinInput('');
   };
 
@@ -253,7 +242,7 @@ export default function AdminDashboard() {
                   maxLength={6}
                   required
                   autoFocus
-                  placeholder="Enter PIN (0916)"
+                  placeholder="Enter PIN"
                   value={pinInput}
                   onChange={(e) => {
                     setPinInput(e.target.value);
@@ -268,7 +257,7 @@ export default function AdminDashboard() {
               </div>
               {pinError && (
                 <p className="text-xs text-red-400 font-semibold mt-2 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" /> Incorrect Security PIN. Try 0916.
+                  <AlertTriangle className="w-3.5 h-3.5" /> Incorrect Security PIN.
                 </p>
               )}
             </div>
