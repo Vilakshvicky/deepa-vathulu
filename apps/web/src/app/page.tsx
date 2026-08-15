@@ -570,12 +570,31 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* Product Icon */}
+                    {/* Product Image / Icon */}
                     <div
                       onClick={() => setSelectedProduct(product)}
-                      className="cursor-pointer py-6 text-center text-5xl group-hover:scale-110 transition-transform duration-300"
+                      className="cursor-pointer mb-4 h-48 w-full flex items-center justify-center rounded-xl bg-stone-950/60 border border-stone-800/80 group-hover:border-amber-500/40 transition-all duration-300 overflow-hidden relative"
                     >
-                      🪔
+                      {product.image_url ? (
+                        <img
+                          src={product.image_url}
+                          alt={product.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                            if (e.currentTarget.parentElement) {
+                              const fallback = document.createElement('div');
+                              fallback.className = 'text-5xl group-hover:scale-110 transition-transform duration-300';
+                              fallback.innerText = '🪔';
+                              e.currentTarget.parentElement.appendChild(fallback);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="text-5xl group-hover:scale-110 transition-transform duration-300">
+                          🪔
+                        </div>
+                      )}
                     </div>
 
                     {/* Details */}
@@ -822,7 +841,17 @@ export default function Home() {
               <X className="w-5 h-5" />
             </button>
 
-            <div className="text-center py-6 text-6xl">🪔</div>
+            <div className="mb-4 h-56 w-full flex items-center justify-center rounded-xl bg-stone-950/80 border border-stone-800 overflow-hidden relative">
+              {selectedProduct.image_url ? (
+                <img
+                  src={selectedProduct.image_url}
+                  alt={selectedProduct.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="text-6xl">🪔</div>
+              )}
+            </div>
 
             {selectedProduct.tag && (
               <span className="px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold uppercase tracking-wider inline-block mb-3">
