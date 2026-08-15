@@ -1,4 +1,5 @@
 'use client';
+// Trigger Vercel Web Storefront Build - Razorpay Live Checkout
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
