@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from './lib/supabase';
@@ -293,7 +294,21 @@ export default function App() {
     }
   };
 
-  const handleRazorpaySuccessPayment = () => {
+  const handleRazorpaySuccessPayment = async () => {
+    try {
+      const upiDeepLink = `upi://pay?pa=${encodeURIComponent(selectedUpiOption)}&pn=${encodeURIComponent('Deepa Vathulu Store')}&am=${totalCartPrice}&cu=INR`;
+      const canOpen = await Linking.canOpenURL(upiDeepLink);
+      if (canOpen) {
+        await Linking.openURL(upiDeepLink);
+      } else {
+        Alert.alert(
+          'Real UPI Payment',
+          'Please scan the QR Code on screen or send UPI payment to vilaksh.peddi@ybl using Google Pay, PhonePe, or Paytm.'
+        );
+      }
+    } catch (err) {
+      console.log('Error opening UPI App:', err);
+    }
     const paymentId = `pay_rzp_live_${Math.floor(100000000 + Math.random() * 900000000)}`;
     processOrderCreation('paid', paymentId);
   };
