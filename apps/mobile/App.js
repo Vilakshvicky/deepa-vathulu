@@ -713,7 +713,7 @@ export default function App() {
             <View style={styles.rzpHeader}>
               <View>
                 <Text style={styles.rzpHeaderTitle}>Razorpay Secure Payment</Text>
-                <Text style={styles.rzpHeaderSub}>Deepa Vathulu Store • Test Mode</Text>
+                <Text style={styles.rzpHeaderSub}>Deepa Vathulu Store • Razorpay Live</Text>
               </View>
               <TouchableOpacity onPress={() => setIsRazorpayOverlayVisible(false)}>
                 <Text style={styles.rzpCloseText}>Cancel ✕</Text>
