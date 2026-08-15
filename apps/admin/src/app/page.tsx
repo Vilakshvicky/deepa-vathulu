@@ -49,7 +49,7 @@ interface Order {
   created_at: string;
 }
 
-const DEFAULT_ADMIN_PIN = '7777';
+const DEFAULT_ADMIN_PIN = '0916';
 
 const SAMPLE_PRODUCTS: Product[] = [
   { id: '1', name: 'Traditional Clay Diya Set with Cotton Wicks (Pack of 12)', category: 'Daily Wicks', price: 299, stock: 45, is_active: true },
@@ -92,7 +92,7 @@ export default function AdminDashboard() {
 
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === DEFAULT_ADMIN_PIN || pinInput === '1234') {
+    if (pinInput === DEFAULT_ADMIN_PIN || pinInput === '0916') {
       setIsAuthenticated(true);
       setPinError(false);
       sessionStorage.setItem('admin_authenticated', 'true');
@@ -253,7 +253,7 @@ export default function AdminDashboard() {
                   maxLength={6}
                   required
                   autoFocus
-                  placeholder="Enter 4-digit PIN (e.g. 7777)"
+                  placeholder="Enter PIN (0916)"
                   value={pinInput}
                   onChange={(e) => {
                     setPinInput(e.target.value);
@@ -268,7 +268,7 @@ export default function AdminDashboard() {
               </div>
               {pinError && (
                 <p className="text-xs text-red-400 font-semibold mt-2 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" /> Incorrect Security PIN. Try 7777 or 1234.
+                  <AlertTriangle className="w-3.5 h-3.5" /> Incorrect Security PIN. Try 0916.
                 </p>
               )}
             </div>
