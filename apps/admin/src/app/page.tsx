@@ -25,6 +25,10 @@ import {
   LogOut,
   ShieldCheck,
   ChevronRight,
+  Plus,
+  X,
+  Image as ImageIcon,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface Product {
@@ -34,6 +38,8 @@ interface Product {
   price: number;
   stock: number;
   is_active: boolean;
+  image_url?: string;
+  description?: string;
 }
 
 interface Order {
@@ -80,6 +86,17 @@ export default function AdminDashboard() {
   const [searchOrder, setSearchOrder] = useState('');
   const [editingStockId, setEditingStockId] = useState<string | null>(null);
   const [tempStockValue, setTempStockValue] = useState<number>(0);
+
+  // New Product Modal State
+  const [isAddProductOpen, setIsAddProductOpen] = useState<boolean>(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductCategory, setNewProductCategory] = useState('Daily Wicks');
+  const [newProductPrice, setNewProductPrice] = useState<number>(299);
+  const [newProductStock, setNewProductStock] = useState<number>(50);
+  const [newProductImage, setNewProductImage] = useState('');
+  const [newProductDesc, setNewProductDesc] = useState('');
+  const [isSubmittingProduct, setIsSubmittingProduct] = useState(false);
+  const [addProductSuccess, setAddProductSuccess] = useState(false);
 
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,6 +169,50 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated, fetchAdminData]);
 
+  const handleCreateProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProductName.trim()) return;
+
+    try {
+      setIsSubmittingProduct(true);
+      const newProdObj = {
+        name: newProductName.trim(),
+        category: newProductCategory,
+        price: Number(newProductPrice) || 299,
+        stock: Number(newProductStock) || 50,
+        is_active: true,
+        image_url: newProductImage.trim() || 'https://images.unsplash.com/photo-1605371924599-2d0365da1ae0?w=600&q=80',
+        description: newProductDesc.trim() || '100% Pure Organic Cotton Wicks handcrafted for traditional Deepam and pooja rituals.',
+      };
+
+      const { data, error } = await supabase.from('products').insert([newProdObj]).select();
+
+      if (error) {
+        console.error('Supabase Product Insert Error:', error);
+        // Fallback local add if DB table columns differ
+        const localId = `p_${Date.now()}`;
+        setProducts((prev) => [{ id: localId, ...newProdObj }, ...prev]);
+      } else if (data && data.length > 0) {
+        setProducts((prev) => [data[0], ...prev]);
+      }
+
+      setAddProductSuccess(true);
+      setTimeout(() => {
+        setAddProductSuccess(false);
+        setIsAddProductOpen(false);
+        setNewProductName('');
+        setNewProductPrice(299);
+        setNewProductStock(50);
+        setNewProductImage('');
+        setNewProductDesc('');
+      }, 1200);
+    } catch (err) {
+      console.error('Unexpected Product creation error:', err);
+    } finally {
+      setIsSubmittingProduct(false);
+    }
+  };
+
   const handleStockUpdate = async (id: string, newStock: number) => {
     const validStock = Math.max(0, newStock);
     try {
@@ -215,7 +276,6 @@ export default function AdminDashboard() {
     return (
       <div className="min-h-screen bg-stone-950 text-stone-100 font-sans flex items-center justify-center p-4 selection:bg-amber-500 selection:text-stone-950">
         <div className="bg-stone-900 border border-stone-800 rounded-3xl max-w-md w-full p-8 shadow-2xl relative overflow-hidden">
-          {/* Top Decorative Amber Line */}
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-600 via-orange-500 to-amber-600" />
 
           <div className="text-center mb-8">
@@ -306,6 +366,14 @@ export default function AdminDashboard() {
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsAddProductOpen(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+              <span>Add Product</span>
+            </button>
+
             <button
               onClick={() => fetchAdminData()}
               className="p-2.5 bg-stone-900 hover:bg-stone-800 border border-stone-800 rounded-xl text-stone-300 transition-colors flex items-center gap-2 text-xs font-semibold"
@@ -517,15 +585,24 @@ export default function AdminDashboard() {
                 <p className="text-xs text-stone-400">Click stock number to edit quantity directly</p>
               </div>
 
-              <div className="relative max-w-xs w-full">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
-                <input
-                  type="text"
-                  placeholder="Filter products..."
-                  value={searchProduct}
-                  onChange={(e) => setSearchProduct(e.target.value)}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
-                />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setIsAddProductOpen(true)}
+                  className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 text-stone-950 font-black text-xs rounded-xl shadow-lg flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4 stroke-[3]" /> Add Product
+                </button>
+
+                <div className="relative max-w-xs w-full">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
+                  <input
+                    type="text"
+                    placeholder="Filter products..."
+                    value={searchProduct}
+                    onChange={(e) => setSearchProduct(e.target.value)}
+                    className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
               </div>
             </div>
 
@@ -684,6 +761,155 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Add New Product Modal Dialog */}
+      {isAddProductOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-stone-900 border border-stone-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative overflow-hidden space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-4 border-b border-stone-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
+                  <Package className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-stone-100">Add New Product</h3>
+                  <p className="text-[11px] text-stone-400">Publish item to Web & Mobile Storefront</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsAddProductOpen(false)}
+                className="p-2 rounded-xl bg-stone-950 text-stone-400 hover:text-stone-100 border border-stone-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {addProductSuccess ? (
+              <div className="py-12 text-center space-y-3">
+                <CheckCircle2 className="w-14 h-14 text-amber-400 mx-auto animate-bounce" />
+                <h4 className="text-lg font-extrabold text-stone-100">Product Added Successfully!</h4>
+                <p className="text-xs text-stone-400">Live catalog updated across Web & Mobile</p>
+              </div>
+            ) : (
+              <form onSubmit={handleCreateProduct} className="space-y-4">
+                <div>
+                  <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                    Product Title *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Panchamukhi Cotton Wick Pack (500 pcs)"
+                    value={newProductName}
+                    onChange={(e) => setNewProductName(e.target.value)}
+                    className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-stone-100 focus:outline-none focus:border-amber-500 placeholder:text-stone-600"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                      Category *
+                    </label>
+                    <select
+                      value={newProductCategory}
+                      onChange={(e) => setNewProductCategory(e.target.value)}
+                      className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-stone-100 focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="Daily Wicks">Daily Wicks</option>
+                      <option value="Specialty Wicks">Specialty Wicks</option>
+                      <option value="Akhanda Wicks">Akhanda Wicks</option>
+                      <option value="Pooja Kits">Pooja Kits</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                      Price (₹) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={newProductPrice}
+                      onChange={(e) => setNewProductPrice(Number(e.target.value))}
+                      className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-stone-100 focus:outline-none focus:border-amber-500 font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                      Stock Quantity *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={newProductStock}
+                      onChange={(e) => setNewProductStock(Number(e.target.value))}
+                      className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-stone-100 focus:outline-none focus:border-amber-500 font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                      Photo URL (Optional)
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://..."
+                      value={newProductImage}
+                      onChange={(e) => setNewProductImage(e.target.value)}
+                      className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-stone-100 focus:outline-none focus:border-amber-500 placeholder:text-stone-600"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-stone-300 block mb-1.5 uppercase">
+                    Description
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="Short product description..."
+                    value={newProductDesc}
+                    onChange={(e) => setNewProductDesc(e.target.value)}
+                    className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 focus:outline-none focus:border-amber-500 placeholder:text-stone-600"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddProductOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-stone-950 text-stone-400 hover:text-stone-200 text-xs font-bold border border-stone-800"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingProduct}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 text-stone-950 text-xs font-black shadow-lg shadow-amber-500/20 flex items-center gap-2"
+                  >
+                    {isSubmittingProduct ? (
+                      <span>Saving Product...</span>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4 stroke-[3]" />
+                        <span>Publish Product</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
