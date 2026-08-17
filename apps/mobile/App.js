@@ -458,7 +458,7 @@ export default function App() {
                               : DEFAULT_PLACEHOLDER_IMAGE,
                         }}
                         style={styles.productImage}
-                        resizeMode="contain"
+                        resizeMode="cover"
                       />
                     </View>
 
@@ -540,7 +540,7 @@ export default function App() {
                           : DEFAULT_PLACEHOLDER_IMAGE,
                     }}
                     style={styles.modalProductImage}
-                    resizeMode="contain"
+                    resizeMode="cover"
                   />
                 </View>
 
@@ -1147,11 +1147,8 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    backgroundColor: '#F3EFEA',
     marginVertical: 6,
-    padding: 4,
   },
   productImage: {
     width: '100%',
@@ -1262,14 +1259,11 @@ const styles = StyleSheet.create({
   },
   modalImageContainer: {
     width: '100%',
-    height: 190,
+    height: 180,
     borderRadius: 14,
     overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    backgroundColor: '#F3EFEA',
     marginVertical: 12,
-    padding: 6,
   },
   modalProductImage: {
     width: '100%',

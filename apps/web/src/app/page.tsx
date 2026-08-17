@@ -579,13 +579,13 @@ export default function Home() {
                     {/* Product Image / Icon */}
                     <div
                       onClick={() => setSelectedProduct(product)}
-                      className="cursor-pointer mb-4 h-48 w-full flex items-center justify-center rounded-xl bg-white border border-stone-200/80 group-hover:border-amber-500/60 shadow-sm transition-all duration-300 overflow-hidden relative p-2"
+                      className="cursor-pointer mb-4 h-48 w-full flex items-center justify-center rounded-xl bg-stone-950/60 border border-stone-800/80 group-hover:border-amber-500/40 transition-all duration-300 overflow-hidden relative"
                     >
                       {product.image_url ? (
                         <img
                           src={product.image_url}
                           alt={product.name}
-                          className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
                             if (e.currentTarget.parentElement) {
@@ -847,12 +847,12 @@ export default function Home() {
               <X className="w-5 h-5" />
             </button>
 
-            <div className="mb-4 h-56 w-full flex items-center justify-center rounded-xl bg-white border border-stone-200/80 shadow-sm overflow-hidden relative p-3">
+            <div className="mb-4 h-56 w-full flex items-center justify-center rounded-xl bg-stone-950/80 border border-stone-800 overflow-hidden relative">
               {selectedProduct.image_url ? (
                 <img
                   src={selectedProduct.image_url}
                   alt={selectedProduct.name}
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-cover"
                 />
               ) : (
                 <div className="text-6xl">🪔</div>
