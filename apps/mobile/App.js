@@ -21,6 +21,8 @@ import { supabase } from './lib/supabase';
 
 LogBox.ignoreAllLogs();
 
+const DEFAULT_PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1605371924599-2d0365da1ae0?w=600&q=80';
+
 // Fallback catalog items for Deepa Vathulu (Pure Cotton Wicks)
 const SAMPLE_PRODUCTS = [
   {
@@ -32,6 +34,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Handcrafted terracotta diyas paired with pure hand-rolled cotton wicks for daily pooja.',
     tag: 'Best Seller',
     stock: 50,
+    image_url: 'https://images.unsplash.com/photo-1605371924599-2d0365da1ae0?w=600&q=80',
   },
   {
     id: '2',
@@ -42,6 +45,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Specially shaped multi-wick cotton wicks designed for 5-face deepam lighting.',
     tag: 'Sacred Quality',
     stock: 45,
+    image_url: 'https://images.unsplash.com/photo-1602607414963-39a7e6b77c50?w=600&q=80',
   },
   {
     id: '3',
@@ -52,6 +56,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Ready-to-use ghee wicks crafted from pure cow ghee and organic cotton.',
     tag: 'Eco Friendly',
     stock: 100,
+    image_url: 'https://images.unsplash.com/photo-1545205597-3d9d02c29597?w=600&q=80',
   },
   {
     id: '4',
@@ -62,6 +67,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Extra thick long-burning organic cotton wicks crafted for continuous Akhanda deepams.',
     tag: 'Long Burning',
     stock: 25,
+    image_url: 'https://images.unsplash.com/photo-1574634534894-89d7576c8259?w=600&q=80',
   },
   {
     id: '5',
@@ -72,6 +78,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Complete hamper containing assorted flower wicks, long wicks, ghee wicks & clay diyas.',
     tag: 'Gift Special',
     stock: 30,
+    image_url: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=600&q=80',
   },
   {
     id: '6',
@@ -82,6 +89,7 @@ const SAMPLE_PRODUCTS = [
     description: 'Round lotus-shaped flower cotton wicks for temple and home oil deepams.',
     tag: 'Popular',
     stock: 60,
+    image_url: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=600&q=80',
   },
 ];
 
@@ -441,7 +449,18 @@ export default function App() {
                       <Text style={styles.ratingText}>★ {product.rating || '4.9'}</Text>
                     </View>
 
-                    <Text style={styles.productIcon}>🪔</Text>
+                    <View style={styles.productImageContainer}>
+                      <Image
+                        source={{
+                          uri:
+                            product.image_url && typeof product.image_url === 'string' && product.image_url.trim() !== ''
+                              ? product.image_url.trim()
+                              : DEFAULT_PLACEHOLDER_IMAGE,
+                        }}
+                        style={styles.productImage}
+                        resizeMode="cover"
+                      />
+                    </View>
 
                     <Text style={styles.productTitle} numberOfLines={2}>
                       {product.name}
@@ -512,8 +531,17 @@ export default function App() {
                   <Text style={styles.modalCloseText}>✕</Text>
                 </TouchableOpacity>
 
-                <View style={styles.modalHeaderIcon}>
-                  <Text style={{ fontSize: 60 }}>🪔</Text>
+                <View style={styles.modalImageContainer}>
+                  <Image
+                    source={{
+                      uri:
+                        selectedProduct.image_url && typeof selectedProduct.image_url === 'string' && selectedProduct.image_url.trim() !== ''
+                          ? selectedProduct.image_url.trim()
+                          : DEFAULT_PLACEHOLDER_IMAGE,
+                    }}
+                    style={styles.modalProductImage}
+                    resizeMode="cover"
+                  />
                 </View>
 
                 {selectedProduct.tag && (
@@ -585,6 +613,16 @@ export default function App() {
                 <Text style={styles.formSectionTitle}>Cart Items</Text>
                 {cart.map((item) => (
                   <View key={item.id} style={styles.cartItemRow}>
+                    <Image
+                      source={{
+                        uri:
+                          item.image_url && typeof item.image_url === 'string' && item.image_url.trim() !== ''
+                            ? item.image_url.trim()
+                            : DEFAULT_PLACEHOLDER_IMAGE,
+                      }}
+                      style={styles.cartItemThumbnail}
+                      resizeMode="cover"
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.cartItemName}>{item.name}</Text>
                       <Text style={styles.cartItemPrice}>₹{item.price} each</Text>
@@ -1104,6 +1142,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#D97706',
   },
+  productImageContainer: {
+    width: '100%',
+    height: 120,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#F3EFEA',
+    marginVertical: 6,
+  },
+  productImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 10,
+  },
   productIcon: {
     fontSize: 38,
     textAlign: 'center',
@@ -1206,6 +1257,19 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#6B7280',
     fontWeight: 'bold',
+  },
+  modalImageContainer: {
+    width: '100%',
+    height: 180,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#F3EFEA',
+    marginVertical: 12,
+  },
+  modalProductImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 14,
   },
   modalHeaderIcon: {
     alignItems: 'center',
@@ -1315,6 +1379,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     borderWidth: 1,
     borderColor: '#EFEAE2',
+  },
+  cartItemThumbnail: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#F3EFEA',
+    marginRight: 10,
   },
   cartItemName: {
     fontSize: 13,
