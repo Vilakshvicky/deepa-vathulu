@@ -458,7 +458,7 @@ export default function App() {
                               : DEFAULT_PLACEHOLDER_IMAGE,
                         }}
                         style={styles.productImage}
-                        resizeMode="cover"
+                        resizeMode="contain"
                       />
                     </View>
 
@@ -540,7 +540,7 @@ export default function App() {
                           : DEFAULT_PLACEHOLDER_IMAGE,
                     }}
                     style={styles.modalProductImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                 </View>
 
@@ -1147,13 +1147,15 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: '#F3EFEA',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     marginVertical: 6,
+    padding: 4,
   },
   productImage: {
     width: '100%',
-    height: 120,
-    borderRadius: 10,
+    height: '100%',
   },
   productIcon: {
     fontSize: 38,
@@ -1260,16 +1262,18 @@ const styles = StyleSheet.create({
   },
   modalImageContainer: {
     width: '100%',
-    height: 180,
+    height: 190,
     borderRadius: 14,
     overflow: 'hidden',
-    backgroundColor: '#F3EFEA',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     marginVertical: 12,
+    padding: 6,
   },
   modalProductImage: {
     width: '100%',
-    height: 180,
-    borderRadius: 14,
+    height: '100%',
   },
   modalHeaderIcon: {
     alignItems: 'center',
@@ -1381,10 +1385,12 @@ const styles = StyleSheet.create({
     borderColor: '#EFEAE2',
   },
   cartItemThumbnail: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: 8,
-    backgroundColor: '#F3EFEA',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     marginRight: 10,
   },
   cartItemName: {
