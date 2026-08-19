@@ -56,7 +56,7 @@ interface UserProfile {
   id: string;
   email?: string;
   phone?: string;
-  full_name?: string;
+  full_name: string;
   shipping_address?: string;
 }
 
@@ -66,7 +66,7 @@ interface OrderRecord {
   customer_phone?: string;
   shipping_address?: string;
   total_amount: number;
-  status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered' | 'Profile';
+  status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered';
   payment_status?: string;
   payment_method?: string;
   items?: string;
@@ -213,7 +213,7 @@ export default function Home() {
       const localUserStr = localStorage.getItem('deepa_vathulu_user');
       if (localUserStr) {
         const initialUser: UserProfile = JSON.parse(localUserStr);
-        if (initialUser) {
+        if (initialUser && initialUser.full_name) {
           setUser(initialUser);
           populateProfileFields(initialUser);
           fetchUserOrders(initialUser.phone, initialUser.email);
@@ -258,26 +258,29 @@ export default function Home() {
     }
   };
 
-  // Fetch Previous Order History for User from Supabase
+  // Fetch Previous Order History for User from Supabase (Excludes 'Profile' rows)
   const fetchUserOrders = async (phone?: string, email?: string) => {
     try {
       setOrdersLoading(true);
       const { data, error } = await supabase
         .from('orders')
         .select('*')
+        .neq('status', 'Profile')
+        .not('id', 'like', 'USER_PROFILE_%')
         .order('created_at', { ascending: false });
 
       if (error || !data) return;
 
-      const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+      const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
       const cleanEmail = email ? email.toLowerCase().trim() : '';
 
       const matchedOrders = data.filter((order: any) => {
-        if (order.status === 'Profile') return false; // Ignore profile records
+        if (order.status === 'Profile' || order.id?.startsWith('USER_PROFILE_')) return false;
         let meta: any = {};
         try { meta = JSON.parse(order.items || '{}'); } catch (e) {}
         
-        const matchPhone = cleanPhone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+        const ordPhone = (order.customer_phone || '').replace(/\D/g, '').slice(-10);
+        const matchPhone = cleanPhone && ordPhone && ordPhone.includes(cleanPhone);
         const matchEmail = cleanEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
         return matchPhone || matchEmail;
       });
@@ -290,7 +293,7 @@ export default function Home() {
     }
   };
 
-  // Save profile to Supabase so mobile and web stay in sync
+  // Save profile to Supabase database so mobile and web stay 100% in sync
   const saveProfileToSupabase = async (profile: {
     full_name: string;
     phone?: string;
@@ -298,7 +301,7 @@ export default function Home() {
     shipping_address?: string;
     password?: string;
   }) => {
-    const cleanPhone = (profile.phone || '').replace(/\D/g, '');
+    const cleanPhone = (profile.phone || '').replace(/\D/g, '').slice(-10);
     const cleanEmail = (profile.email || '').toLowerCase().trim();
     const profileKey = cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_');
     if (!profileKey) return;
@@ -338,97 +341,68 @@ export default function Home() {
     try {
       if (authTab === 'signin') {
         const identifier = authIdentifier.trim();
-        const cleanPhone = identifier.replace(/\D/g, '');
+        const cleanPhone = identifier.replace(/\D/g, '').slice(-10);
         const cleanEmail = identifier.toLowerCase().trim();
         const isEmail = identifier.includes('@');
 
         if (!identifier || !authPassword) {
-          setAuthMessage({ type: 'error', text: 'Please enter your login details.' });
+          setAuthMessage({ type: 'error', text: 'Please enter your phone/email and password.' });
           setAuthLoading(false);
           return;
         }
 
-        let signedInUser: UserProfile | null = null;
-
-        // 1. Fetch from Supabase profile record
-        const profileKey = isEmail ? cleanEmail.replace(/[^a-z0-9]/g, '_') : cleanPhone;
-        const { data: directProfile } = await supabase
+        // Fetch all profile records from Supabase
+        const { data: profileRows, error } = await supabase
           .from('orders')
           .select('*')
-          .eq('id', `USER_PROFILE_${profileKey}`)
-          .maybeSingle();
+          .or('status.eq.Profile,id.like.USER_PROFILE_%');
 
-        if (directProfile) {
-          let meta: any = {};
-          try { meta = JSON.parse(directProfile.items || '{}'); } catch (e) {}
-          if (meta.password && meta.password !== authPassword) {
-            setAuthMessage({ type: 'error', text: 'Incorrect password. Please try again.' });
-            setAuthLoading(false);
-            return;
-          }
+        let matchedRow: any = null;
+        let matchedMeta: any = {};
 
-          signedInUser = {
-            id: directProfile.id,
-            full_name: directProfile.customer_name || meta.full_name || 'Customer',
-            phone: directProfile.customer_phone || meta.phone || (isEmail ? '' : identifier),
-            email: meta.email || (isEmail ? identifier : ''),
-            shipping_address: directProfile.shipping_address || meta.address || '',
-          };
-        }
+        if (profileRows && profileRows.length > 0) {
+          matchedRow = profileRows.find((r: any) => {
+            let meta: any = {};
+            try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
+            const rowPhone = (r.customer_phone || meta.phone || '').replace(/\D/g, '').slice(-10);
+            const rowEmail = (meta.email || '').toLowerCase().trim();
 
-        // 2. If not found, check matching past orders in Supabase
-        if (!signedInUser) {
-          const { data: allOrders } = await supabase
-            .from('orders')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-          if (allOrders) {
-            const matched = allOrders.find((r: any) => {
-              let meta: any = {};
-              try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
-              const phoneMatch = cleanPhone && r.customer_phone && r.customer_phone.replace(/\D/g, '').includes(cleanPhone);
-              const emailMatch = isEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
-              return phoneMatch || emailMatch;
-            });
-
-            if (matched) {
-              let meta: any = {};
-              try { meta = JSON.parse(matched.items || '{}'); } catch (e) {}
-              if (meta.password && meta.password !== authPassword) {
-                setAuthMessage({ type: 'error', text: 'Incorrect password. Please try again.' });
-                setAuthLoading(false);
-                return;
-              }
-
-              signedInUser = {
-                id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
-                full_name: matched.customer_name || meta.full_name || 'Customer',
-                phone: matched.customer_phone || (isEmail ? '' : identifier),
-                email: meta.email || (isEmail ? identifier : ''),
-                shipping_address: matched.shipping_address || meta.address || '',
-              };
-            }
-          }
-        }
-
-        // 3. Fallback seamless user session
-        if (!signedInUser) {
-          signedInUser = {
-            id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
-            full_name: isEmail ? identifier.split('@')[0] : `Customer ${cleanPhone.slice(-4)}`,
-            phone: !isEmail ? identifier : '',
-            email: isEmail ? identifier : '',
-            shipping_address: '',
-          };
-          // Save to Supabase
-          await saveProfileToSupabase({
-            full_name: signedInUser.full_name || 'Customer',
-            phone: signedInUser.phone,
-            email: signedInUser.email,
-            password: authPassword,
+            const phoneMatches = cleanPhone && rowPhone && rowPhone === cleanPhone;
+            const emailMatches = isEmail && rowEmail && rowEmail === cleanEmail;
+            return phoneMatches || emailMatches;
           });
         }
+
+        if (!matchedRow) {
+          setAuthMessage({
+            type: 'error',
+            text: 'Account not found! Please check your credentials or click "Create Account" to register.',
+          });
+          setAuthLoading(false);
+          return;
+        }
+
+        try {
+          matchedMeta = JSON.parse(matchedRow.items || '{}');
+        } catch (e) {}
+
+        // Verify password
+        if (matchedMeta.password && matchedMeta.password !== authPassword) {
+          setAuthMessage({
+            type: 'error',
+            text: 'Incorrect password. Please enter the password you chose during account creation.',
+          });
+          setAuthLoading(false);
+          return;
+        }
+
+        const signedInUser: UserProfile = {
+          id: matchedRow.id,
+          full_name: matchedRow.customer_name || matchedMeta.full_name || 'Customer',
+          phone: matchedRow.customer_phone || matchedMeta.phone || (isEmail ? '' : identifier),
+          email: matchedMeta.email || (isEmail ? identifier : ''),
+          shipping_address: matchedRow.shipping_address || matchedMeta.address || '',
+        };
 
         setUser(signedInUser);
         localStorage.setItem('deepa_vathulu_user', JSON.stringify(signedInUser));
@@ -438,16 +412,16 @@ export default function Home() {
         setAuthMessage({ type: 'success', text: `Welcome back, ${signedInUser.full_name}!` });
         setTimeout(() => {
           setProfileTab('orders');
-        }, 500);
+        }, 600);
       } else {
         // Sign Up Flow
-        if (!authName || !authPassword || (!authEmail && !authPhone)) {
-          setAuthMessage({ type: 'error', text: 'Please fill in all required fields to create your account.' });
+        if (!authName.trim() || !authPassword.trim() || (!authEmail.trim() && !authPhone.trim())) {
+          setAuthMessage({ type: 'error', text: 'Please enter your Full Name, Phone/Email, and a Password.' });
           setAuthLoading(false);
           return;
         }
 
-        const cleanPhone = authPhone.replace(/\D/g, '');
+        const cleanPhone = authPhone.replace(/\D/g, '').slice(-10);
         const cleanEmail = authEmail.toLowerCase().trim();
         const newUserId = `USER_PROFILE_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
         
@@ -459,9 +433,9 @@ export default function Home() {
           shipping_address: authAddress.trim() || undefined,
         };
 
-        // Save to Supabase so Mobile App can instantly log in with this account
+        // Save to Supabase so Mobile App and Web are always synchronized
         await saveProfileToSupabase({
-          full_name: newProfile.full_name || 'Customer',
+          full_name: newProfile.full_name,
           phone: newProfile.phone,
           email: newProfile.email,
           shipping_address: newProfile.shipping_address,
@@ -473,10 +447,10 @@ export default function Home() {
         populateProfileFields(newProfile);
         fetchUserOrders(newProfile.phone, newProfile.email);
 
-        setAuthMessage({ type: 'success', text: 'Account successfully created and synced with mobile app!' });
+        setAuthMessage({ type: 'success', text: 'Account created successfully! You are now logged in.' });
         setTimeout(() => {
           setProfileTab('orders');
-        }, 500);
+        }, 600);
       }
     } catch (err: any) {
       setAuthMessage({ type: 'error', text: err?.message || 'Authentication error. Please try again.' });
@@ -514,7 +488,7 @@ export default function Home() {
 
     // Sync to Supabase
     await saveProfileToSupabase({
-      full_name: updatedUser.full_name || 'Customer',
+      full_name: updatedUser.full_name,
       phone: updatedUser.phone,
       email: updatedUser.email,
       shipping_address: updatedUser.shipping_address,
@@ -568,6 +542,18 @@ export default function Home() {
   });
 
   const processOrderCreation = async (paymentStatus: 'paid' | 'unpaid', paymentRef?: string) => {
+    // Enforce mandatory profile login
+    if (!user) {
+      setIsCartOpen(false);
+      setIsAuthModalOpen(true);
+      setAuthTab('signup');
+      setAuthMessage({
+        type: 'error',
+        text: 'Account Required: Please create an account or sign in to complete your order.',
+      });
+      return;
+    }
+
     setIsCheckingOut(true);
     const newOrderId = `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -585,9 +571,9 @@ export default function Home() {
 
       const fullPayload = {
         id: newOrderId,
-        customer_name: customerName || user?.full_name || 'Guest Customer',
-        customer_phone: customerPhone || user?.phone || 'Not provided',
-        shipping_address: shippingAddress || user?.shipping_address || 'Standard Delivery',
+        customer_name: customerName || user.full_name,
+        customer_phone: customerPhone || user.phone || 'Not provided',
+        shipping_address: shippingAddress || user.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_method: orderMethodLabel,
@@ -625,9 +611,9 @@ export default function Home() {
       // Instantly add to local user order history
       const placedOrderRecord: OrderRecord = {
         id: newOrderId,
-        customer_name: customerName || user?.full_name || 'Customer',
-        customer_phone: customerPhone || user?.phone,
-        shipping_address: shippingAddress || user?.shipping_address,
+        customer_name: customerName || user.full_name,
+        customer_phone: customerPhone || user.phone,
+        shipping_address: shippingAddress || user.shipping_address,
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_status: paymentStatus,
@@ -657,6 +643,18 @@ export default function Home() {
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (cart.length === 0) return;
+
+    // Strict account verification before checkout
+    if (!user) {
+      setIsCartOpen(false);
+      setIsAuthModalOpen(true);
+      setAuthTab('signup');
+      setAuthMessage({
+        type: 'error',
+        text: 'Account Required: Please create a profile or log in before placing an order.',
+      });
+      return;
+    }
 
     if (!customerName || !customerPhone || !shippingAddress) {
       alert('Please fill in all delivery details before placing the order.');
@@ -700,9 +698,9 @@ export default function Home() {
           name: 'Deepa Vathulu Store',
           description: 'Pure Sacred Cotton Wicks Order',
           prefill: {
-            name: customerName,
-            contact: customerPhone,
-            email: user?.email || '',
+            name: customerName || user.full_name,
+            contact: customerPhone || user.phone,
+            email: user.email || '',
           },
           theme: {
             color: '#D97706',
@@ -1055,7 +1053,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-stone-100">
-                    {user ? `Customer Account (${user.full_name || 'Customer'})` : 'Customer Sign In & Sign Up'}
+                    {user ? `Customer Account (${user.full_name})` : 'Customer Sign In & Sign Up'}
                   </h3>
                   <p className="text-xs text-stone-400">
                     {user ? 'View previous orders & manage delivery details' : 'Login or register with your email or phone number'}
@@ -1127,13 +1125,13 @@ export default function Home() {
                       <>
                         <div>
                           <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
-                            Email ID or Mobile Phone Number *
+                            Mobile Phone Number or Email *
                           </label>
                           <div className="relative">
                             <input
                               type="text"
                               required
-                              placeholder="e.g. 8074630135 or user@gmail.com"
+                              placeholder="e.g. 7032938500 or user@gmail.com"
                               value={authIdentifier}
                               onChange={(e) => setAuthIdentifier(e.target.value)}
                               className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
@@ -1166,7 +1164,7 @@ export default function Home() {
                           <input
                             type="text"
                             required
-                            placeholder="Enter your full name"
+                            placeholder="Enter your full name (e.g. Sangeetha)"
                             value={authName}
                             onChange={(e) => setAuthName(e.target.value)}
                             className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
@@ -1237,14 +1235,14 @@ export default function Home() {
                       className="w-full mt-6 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
                     >
                       {authLoading ? (
-                        <span>Authenticating...</span>
+                        <span>Authenticating with Database...</span>
                       ) : authTab === 'signin' ? (
                         <>
-                          <LogIn className="w-4 h-4" /> Sign In to Profile
+                          <LogIn className="w-4 h-4" /> Sign In to Account
                         </>
                       ) : (
                         <>
-                          <Check className="w-4 h-4" /> Register & Access Account
+                          <Check className="w-4 h-4" /> Create Account & Log In
                         </>
                       )}
                     </button>
@@ -1260,7 +1258,7 @@ export default function Home() {
                         {user.full_name?.charAt(0).toUpperCase() || 'U'}
                       </div>
                       <div>
-                        <h4 className="text-base font-bold text-stone-100">{user.full_name || 'Customer'}</h4>
+                        <h4 className="text-base font-bold text-stone-100">{user.full_name}</h4>
                         <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400 mt-0.5">
                           {user.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-amber-400" /> {user.phone}</span>}
                           {user.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3 text-amber-400" /> {user.email}</span>}
@@ -1550,101 +1548,129 @@ export default function Home() {
             {/* Checkout Form & Total Section */}
             <div className="p-6 bg-stone-950 border-t border-stone-800 space-y-4">
               {cart.length > 0 && (
-                <form onSubmit={handleCheckoutSubmit} className="space-y-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <h4 className="text-xs font-bold text-stone-300 uppercase tracking-wider">
-                      Delivery Details
-                    </h4>
-                    {user && (
-                      <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Auto-filled from profile
-                      </span>
-                    )}
-                  </div>
-
-                  <div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Full Name *"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div>
-                    <input
-                      type="tel"
-                      required
-                      placeholder="Phone Number (+91) *"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div>
-                    <textarea
-                      rows={2}
-                      required
-                      placeholder="Complete Shipping Address *"
-                      value={shippingAddress}
-                      onChange={(e) => setShippingAddress(e.target.value)}
-                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div>
-                    <span className="block text-[11px] font-semibold text-stone-400 mb-2">
-                      Payment Mode
-                    </span>
-                    <div className="grid grid-cols-2 gap-2">
+                <>
+                  {!user ? (
+                    /* Account Required Notice for Guests */
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 text-center space-y-3">
+                      <div className="w-10 h-10 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto text-amber-400">
+                        <Lock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-amber-300">Account Required to Place Order</h4>
+                        <p className="text-xs text-stone-400 mt-1 leading-relaxed">
+                          Guests can browse items freely, but you must sign in or create an account with your delivery address to place an order.
+                        </p>
+                      </div>
                       <button
                         type="button"
-                        onClick={() => setPaymentMethod('razorpay')}
-                        className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                          paymentMethod === 'razorpay'
-                            ? 'bg-amber-500/10 border-amber-500 text-amber-400'
-                            : 'bg-stone-900 border-stone-800 text-stone-400'
-                        }`}
+                        onClick={() => {
+                          setIsCartOpen(false);
+                          setIsAuthModalOpen(true);
+                          setAuthTab('signup');
+                          setAuthMessage(null);
+                        }}
+                        className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
                       >
-                        <CreditCard className="w-4 h-4" /> Razorpay (UPI/Cards)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMethod('cod')}
-                        className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                          paymentMethod === 'cod'
-                            ? 'bg-amber-500/10 border-amber-500 text-amber-400'
-                            : 'bg-stone-900 border-stone-800 text-stone-400'
-                        }`}
-                      >
-                        <Banknote className="w-4 h-4" /> Cash on Delivery
+                        <User className="w-4 h-4" /> Create Account / Sign In to Checkout
                       </button>
                     </div>
-                  </div>
+                  ) : (
+                    /* Authenticated Checkout Form */
+                    <form onSubmit={handleCheckoutSubmit} className="space-y-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <h4 className="text-xs font-bold text-stone-300 uppercase tracking-wider">
+                          Delivery Details
+                        </h4>
+                        <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Auto-filled for {user.full_name}
+                        </span>
+                      </div>
 
-                  <div className="pt-3 border-t border-stone-800 flex items-center justify-between text-xs text-stone-400">
-                    <span>Order Total ({totalCartCount} items)</span>
-                    <span className="text-base font-extrabold text-amber-400">₹{totalCartPrice.toLocaleString()}</span>
-                  </div>
+                      <div>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Full Name *"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
 
-                  <button
-                    type="submit"
-                    disabled={isCheckingOut}
-                    className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
-                  >
-                    {isCheckingOut ? (
-                      <span>Processing Order...</span>
-                    ) : (
-                      <>
-                        <span>Pay & Place Order (₹{totalCartPrice.toLocaleString()})</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </form>
+                      <div>
+                        <input
+                          type="tel"
+                          required
+                          placeholder="Phone Number (+91) *"
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div>
+                        <textarea
+                          rows={2}
+                          required
+                          placeholder="Complete Shipping Address *"
+                          value={shippingAddress}
+                          onChange={(e) => setShippingAddress(e.target.value)}
+                          className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div>
+                        <span className="block text-[11px] font-semibold text-stone-400 mb-2">
+                          Payment Mode
+                        </span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('razorpay')}
+                            className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                              paymentMethod === 'razorpay'
+                                ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                                : 'bg-stone-900 border-stone-800 text-stone-400'
+                            }`}
+                          >
+                            <CreditCard className="w-4 h-4" /> Razorpay (UPI/Cards)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('cod')}
+                            className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                              paymentMethod === 'cod'
+                                ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                                : 'bg-stone-900 border-stone-800 text-stone-400'
+                            }`}
+                          >
+                            <Banknote className="w-4 h-4" /> Cash on Delivery
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-stone-800 flex items-center justify-between text-xs text-stone-400">
+                        <span>Order Total ({totalCartCount} items)</span>
+                        <span className="text-base font-extrabold text-amber-400">₹{totalCartPrice.toLocaleString()}</span>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isCheckingOut}
+                        className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
+                      >
+                        {isCheckingOut ? (
+                          <span>Processing Order...</span>
+                        ) : (
+                          <>
+                            <span>Pay & Place Order (₹{totalCartPrice.toLocaleString()})</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  )}
+                </>
               )}
             </div>
           </div>

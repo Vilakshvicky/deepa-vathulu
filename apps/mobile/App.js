@@ -23,7 +23,7 @@ LogBox.ignoreAllLogs();
 
 const DEFAULT_PLACEHOLDER_IMAGE = 'https://images.unsplash.com/photo-1605371924599-2d0365da1ae0?w=600&q=80';
 
-// Fallback catalog items for Deepa Vathulu (Pure Cotton Wicks)
+// Catalog items for Deepa Vathulu (Pure Cotton Wicks)
 const SAMPLE_PRODUCTS = [
   {
     id: '1',
@@ -184,26 +184,29 @@ export default function App() {
     }
   };
 
-  // Fetch Previous Order History from Supabase
+  // Fetch Previous Order History from Supabase (Excludes 'Profile' rows)
   const fetchUserOrders = async (phone, email) => {
     try {
       setLoadingOrders(true);
       const { data, error } = await supabase
         .from('orders')
         .select('*')
+        .neq('status', 'Profile')
+        .not('id', 'like', 'USER_PROFILE_%')
         .order('created_at', { ascending: false });
 
       if (error || !data) return;
 
-      const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+      const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
       const cleanEmail = email ? email.toLowerCase().trim() : '';
 
       const matched = data.filter((order) => {
-        if (order.status === 'Profile') return false; // Ignore profile rows
+        if (order.status === 'Profile' || order.id?.startsWith('USER_PROFILE_')) return false;
         let meta = {};
         try { meta = JSON.parse(order.items || '{}'); } catch (e) {}
         
-        const matchPhone = cleanPhone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+        const ordPhone = (order.customer_phone || '').replace(/\D/g, '').slice(-10);
+        const matchPhone = cleanPhone && ordPhone && ordPhone.includes(cleanPhone);
         const matchEmail = cleanEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
         return matchPhone || matchEmail;
       });
@@ -218,7 +221,7 @@ export default function App() {
 
   // Save profile to Supabase database so website and mobile stay in sync
   const saveProfileToSupabase = async (profile) => {
-    const cleanPhone = (profile.phone || '').replace(/\D/g, '');
+    const cleanPhone = (profile.phone || '').replace(/\D/g, '').slice(-10);
     const cleanEmail = (profile.email || '').toLowerCase().trim();
     const profileKey = cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_');
     if (!profileKey) return;
@@ -252,98 +255,67 @@ export default function App() {
   // Mobile Auth: Sign In
   const handleMobileSignIn = async () => {
     const identifier = authIdentifier.trim();
-    const cleanPhone = identifier.replace(/\D/g, '');
+    const cleanPhone = identifier.replace(/\D/g, '').slice(-10);
     const cleanEmail = identifier.toLowerCase().trim();
     const isEmail = identifier.includes('@');
 
     if (!identifier || !authPassword) {
-      Alert.alert('Required Fields', 'Please enter your Email/Phone and Password.');
+      Alert.alert('Required Fields', 'Please enter your Phone/Email and Password.');
       return;
     }
 
     setAuthLoading(true);
 
     try {
-      let signedIn = null;
-
-      // 1. Check Supabase profile record (matches what was created on website)
-      const profileKey = isEmail ? cleanEmail.replace(/[^a-z0-9]/g, '_') : cleanPhone;
-      const { data: directProfile } = await supabase
+      // 1. Query all profile records from Supabase
+      const { data: profileRows, error } = await supabase
         .from('orders')
         .select('*')
-        .eq('id', `USER_PROFILE_${profileKey}`)
-        .maybeSingle();
+        .or('status.eq.Profile,id.like.USER_PROFILE_%');
 
-      if (directProfile) {
-        let meta = {};
-        try { meta = JSON.parse(directProfile.items || '{}'); } catch (e) {}
-        if (meta.password && meta.password !== authPassword) {
-          Alert.alert('Incorrect Password', 'The password you entered is incorrect. Please try again.');
-          setAuthLoading(false);
-          return;
-        }
+      let matchedRow = null;
+      let matchedMeta = {};
 
-        signedIn = {
-          id: directProfile.id,
-          full_name: directProfile.customer_name || meta.full_name || 'Customer',
-          phone: directProfile.customer_phone || meta.phone || (isEmail ? '' : identifier),
-          email: meta.email || (isEmail ? identifier : ''),
-          shipping_address: directProfile.shipping_address || meta.address || '',
-        };
-      }
+      if (profileRows && profileRows.length > 0) {
+        matchedRow = profileRows.find((r) => {
+          let meta = {};
+          try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
+          const rowPhone = (r.customer_phone || meta.phone || '').replace(/\D/g, '').slice(-10);
+          const rowEmail = (meta.email || '').toLowerCase().trim();
 
-      // 2. If not found in profile records, check existing customer orders in Supabase
-      if (!signedIn) {
-        const { data: allOrders } = await supabase
-          .from('orders')
-          .select('*')
-          .order('created_at', { ascending: false });
-
-        if (allOrders && allOrders.length > 0) {
-          const matched = allOrders.find((r) => {
-            let meta = {};
-            try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
-            const phoneMatch = cleanPhone && r.customer_phone && r.customer_phone.replace(/\D/g, '').includes(cleanPhone);
-            const emailMatch = isEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
-            return phoneMatch || emailMatch;
-          });
-
-          if (matched) {
-            let meta = {};
-            try { meta = JSON.parse(matched.items || '{}'); } catch (e) {}
-            if (meta.password && meta.password !== authPassword) {
-              Alert.alert('Incorrect Password', 'The password you entered is incorrect. Please try again.');
-              setAuthLoading(false);
-              return;
-            }
-
-            signedIn = {
-              id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
-              full_name: matched.customer_name || meta.full_name || 'Customer',
-              phone: matched.customer_phone || (isEmail ? '' : identifier),
-              email: meta.email || (isEmail ? identifier : ''),
-              shipping_address: matched.shipping_address || meta.address || '',
-            };
-          }
-        }
-      }
-
-      // 3. Fallback seamless login
-      if (!signedIn) {
-        signedIn = {
-          id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
-          full_name: isEmail ? identifier.split('@')[0] : `Customer ${cleanPhone.slice(-4)}`,
-          phone: !isEmail ? identifier : '',
-          email: isEmail ? identifier : '',
-          shipping_address: '',
-        };
-        await saveProfileToSupabase({
-          full_name: signedIn.full_name,
-          phone: signedIn.phone,
-          email: signedIn.email,
-          password: authPassword,
+          const phoneMatches = cleanPhone && rowPhone && rowPhone === cleanPhone;
+          const emailMatches = isEmail && rowEmail && rowEmail === cleanEmail;
+          return phoneMatches || emailMatches;
         });
       }
+
+      if (!matchedRow) {
+        Alert.alert(
+          'Account Not Found',
+          'No account found with these details. Please tap "Create Account" to register.'
+        );
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        matchedMeta = JSON.parse(matchedRow.items || '{}');
+      } catch (e) {}
+
+      // Verify Password
+      if (matchedMeta.password && matchedMeta.password !== authPassword) {
+        Alert.alert('Incorrect Password', 'The password you entered is incorrect. Please try again.');
+        setAuthLoading(false);
+        return;
+      }
+
+      const signedIn = {
+        id: matchedRow.id,
+        full_name: matchedRow.customer_name || matchedMeta.full_name || 'Customer',
+        phone: matchedRow.customer_phone || matchedMeta.phone || (isEmail ? '' : identifier),
+        email: matchedMeta.email || (isEmail ? identifier : ''),
+        shipping_address: matchedRow.shipping_address || matchedMeta.address || '',
+      };
 
       setCurrentUser(signedIn);
       populateProfileFields(signedIn);
@@ -359,14 +331,14 @@ export default function App() {
 
   // Mobile Auth: Sign Up
   const handleMobileSignUp = async () => {
-    if (!authFullName || !authPassword || (!authEmail && !authPhone)) {
-      Alert.alert('Required Fields', 'Please enter your Full Name, Email or Phone, and a Password.');
+    if (!authFullName.trim() || !authPassword.trim() || (!authEmail.trim() && !authPhone.trim())) {
+      Alert.alert('Required Fields', 'Please enter your Full Name, Phone/Email, and a Password.');
       return;
     }
 
     setAuthLoading(true);
     try {
-      const cleanPhone = authPhone.replace(/\D/g, '');
+      const cleanPhone = authPhone.replace(/\D/g, '').slice(-10);
       const cleanEmail = authEmail.toLowerCase().trim();
       const newUserId = `USER_PROFILE_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
       
@@ -380,7 +352,7 @@ export default function App() {
 
       // Save to Supabase so website and mobile app share the account
       await saveProfileToSupabase({
-        full_name: newProfile.full_name || 'Customer',
+        full_name: newProfile.full_name,
         phone: newProfile.phone,
         email: newProfile.email,
         shipping_address: newProfile.shipping_address,
@@ -391,7 +363,7 @@ export default function App() {
       populateProfileFields(newProfile);
       fetchUserOrders(newProfile.phone, newProfile.email);
       setProfileActiveTab('orders');
-      Alert.alert('Account Created', 'Your Deepa Vathulu account is ready and synced across all devices!');
+      Alert.alert('Account Created', 'Your account has been created and synced with the website!');
     } catch (err) {
       Alert.alert('Sign Up Error', err?.message || 'Failed to create account.');
     } finally {
@@ -407,7 +379,7 @@ export default function App() {
     setCustomerPhone('');
     setShippingAddress('');
     setIsProfileModalVisible(false);
-    Alert.alert('Signed Out', 'You have been signed out successfully.');
+    Alert.alert('Signed Out', 'You have been signed out.');
   };
 
   // Mobile Save Profile Details
@@ -428,14 +400,14 @@ export default function App() {
 
     // Save to Supabase
     await saveProfileToSupabase({
-      full_name: updated.full_name || 'Customer',
+      full_name: updated.full_name,
       phone: updated.phone,
       email: updated.email,
       shipping_address: updated.shipping_address,
     });
 
     setIsSavingProfile(false);
-    Alert.alert('Profile Updated', 'Your delivery details and profile have been saved across all devices.');
+    Alert.alert('Profile Saved', 'Your profile and delivery address have been updated across web and mobile.');
   };
 
   const addToCart = (product) => {
@@ -482,6 +454,27 @@ export default function App() {
 
   const handleCheckoutInitiation = () => {
     if (cart.length === 0) return;
+
+    // Enforce mandatory profile login before order placement
+    if (!currentUser) {
+      Alert.alert(
+        'Account Required',
+        'Please create an account or sign in with your delivery address to place an order.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Sign In / Register',
+            onPress: () => {
+              setIsCheckoutModalVisible(false);
+              setIsProfileModalVisible(true);
+              setAuthMode('signup');
+            },
+          },
+        ]
+      );
+      return;
+    }
+
     if (!customerName || !customerPhone || !shippingAddress) {
       Alert.alert('Required Fields', 'Please fill in your Name, Phone Number, and Shipping Address.');
       return;
@@ -495,6 +488,11 @@ export default function App() {
   };
 
   const processOrderCreation = async (paymentStatus, paymentRef) => {
+    if (!currentUser) {
+      Alert.alert('Account Required', 'Please sign in to place an order.');
+      return;
+    }
+
     setOrderPlaced(true);
     const newOrderId = `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -512,9 +510,9 @@ export default function App() {
 
       const fullPayload = {
         id: newOrderId,
-        customer_name: customerName || currentUser?.full_name || 'Guest Customer',
-        customer_phone: customerPhone || currentUser?.phone || 'Not provided',
-        shipping_address: shippingAddress || currentUser?.shipping_address || 'Standard Delivery',
+        customer_name: customerName || currentUser.full_name,
+        customer_phone: customerPhone || currentUser.phone || 'Not provided',
+        shipping_address: shippingAddress || currentUser.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_method: orderMethodLabel,
@@ -542,9 +540,9 @@ export default function App() {
       // Add to local order history instantly
       const placedOrderRecord = {
         id: newOrderId,
-        customer_name: customerName || currentUser?.full_name || 'Customer',
-        customer_phone: customerPhone || currentUser?.phone,
-        shipping_address: shippingAddress || currentUser?.shipping_address,
+        customer_name: customerName || currentUser.full_name,
+        customer_phone: customerPhone || currentUser.phone,
+        shipping_address: shippingAddress || currentUser.shipping_address,
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_status: paymentStatus,
@@ -884,7 +882,7 @@ export default function App() {
                       <Text style={styles.inputLabel}>Mobile Phone Number or Email *</Text>
                       <TextInput
                         style={styles.formInput}
-                        placeholder="e.g. 8074630135 or user@gmail.com"
+                        placeholder="e.g. 7032938500 or user@gmail.com"
                         placeholderTextColor="#9CA3AF"
                         value={authIdentifier}
                         onChangeText={setAuthIdentifier}
@@ -918,7 +916,7 @@ export default function App() {
                       <Text style={styles.inputLabel}>Full Name *</Text>
                       <TextInput
                         style={styles.formInput}
-                        placeholder="Enter your full name"
+                        placeholder="Enter your full name (e.g. Sangeetha)"
                         placeholderTextColor="#9CA3AF"
                         value={authFullName}
                         onChangeText={setAuthFullName}
@@ -1290,105 +1288,129 @@ export default function App() {
                   </View>
                 ))}
 
-                {/* Delivery Information */}
+                {/* Delivery Information & Guest Guard */}
                 <View style={{ marginTop: 20 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={styles.formSectionTitle}>Delivery Details</Text>
-                    {currentUser && (
-                      <Text style={{ fontSize: 10, color: '#059669', fontWeight: '700' }}>✓ Auto-filled from profile</Text>
-                    )}
-                  </View>
-
-                  <Text style={styles.inputLabel}>Full Name *</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="Enter your name"
-                    placeholderTextColor="#9CA3AF"
-                    value={customerName}
-                    onChangeText={setCustomerName}
-                  />
-
-                  <Text style={styles.inputLabel}>Phone Number (+91) *</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="Enter 10-digit mobile number"
-                    placeholderTextColor="#9CA3AF"
-                    keyboardType="phone-pad"
-                    value={customerPhone}
-                    onChangeText={setCustomerPhone}
-                  />
-
-                  <Text style={styles.inputLabel}>Complete Shipping Address *</Text>
-                  <TextInput
-                    style={[styles.formInput, { height: 70, textAlignVertical: 'top' }]}
-                    placeholder="House/Flat No, Street, City, State, Pincode"
-                    placeholderTextColor="#9CA3AF"
-                    multiline
-                    value={shippingAddress}
-                    onChangeText={setShippingAddress}
-                  />
-                </View>
-
-                {/* Payment Selection */}
-                <View style={{ marginTop: 20 }}>
-                  <Text style={styles.formSectionTitle}>Payment Mode</Text>
-                  <View style={styles.paymentMethodRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.paymentOptionBtn,
-                        paymentMethod === 'razorpay' && styles.paymentOptionBtnActive,
-                      ]}
-                      onPress={() => setPaymentMethod('razorpay')}
-                    >
-                      <Text
-                        style={[
-                          styles.paymentOptionText,
-                          paymentMethod === 'razorpay' && styles.paymentOptionTextActive,
-                        ]}
+                  {!currentUser ? (
+                    /* Guard: Guest cannot checkout without creating account */
+                    <View style={styles.guestGuardCard}>
+                      <Text style={{ fontSize: 28, marginBottom: 6 }}>🔒</Text>
+                      <Text style={styles.guestGuardTitle}>Account Required to Place Order</Text>
+                      <Text style={styles.guestGuardSub}>
+                        You can browse products as a guest, but to place an order and track delivery, please sign in or create an account.
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.guestAuthBtn}
+                        onPress={() => {
+                          setIsCheckoutModalVisible(false);
+                          setIsProfileModalVisible(true);
+                          setAuthMode('signup');
+                        }}
                       >
-                        💳 Razorpay (UPI/Cards)
-                      </Text>
-                    </TouchableOpacity>
+                        <Text style={styles.guestAuthBtnText}>Create Account / Sign In ➔</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    /* Authenticated Delivery Form */
+                    <>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={styles.formSectionTitle}>Delivery Details</Text>
+                        <Text style={{ fontSize: 10, color: '#059669', fontWeight: '700' }}>
+                          ✓ Auto-filled for {currentUser.full_name}
+                        </Text>
+                      </View>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.paymentOptionBtn,
-                        paymentMethod === 'cod' && styles.paymentOptionBtnActive,
-                      ]}
-                      onPress={() => setPaymentMethod('cod')}
-                    >
-                      <Text
-                        style={[
-                          styles.paymentOptionText,
-                          paymentMethod === 'cod' && styles.paymentOptionTextActive,
-                        ]}
-                      >
-                        💵 Cash on Delivery
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                      <Text style={styles.inputLabel}>Full Name *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="Enter your name"
+                        placeholderTextColor="#9CA3AF"
+                        value={customerName}
+                        onChangeText={setCustomerName}
+                      />
 
-                {/* Cart Order Summary */}
-                <View style={styles.cartFooter}>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Total Payable Amount:</Text>
-                    <Text style={styles.totalValue}>₹{totalCartPrice.toLocaleString()}</Text>
-                  </View>
+                      <Text style={styles.inputLabel}>Phone Number (+91) *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="Enter 10-digit mobile number"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="phone-pad"
+                        value={customerPhone}
+                        onChangeText={setCustomerPhone}
+                      />
 
-                  <TouchableOpacity
-                    style={styles.placeOrderBtn}
-                    onPress={handleCheckoutInitiation}
-                    disabled={orderPlaced}
-                  >
-                    {orderPlaced ? (
-                      <ActivityIndicator color="#FFFFFF" />
-                    ) : (
-                      <Text style={styles.placeOrderBtnText}>
-                        Proceed to Pay ₹{totalCartPrice.toLocaleString()} ➔
-                      </Text>
-                    )}
-                  </TouchableOpacity>
+                      <Text style={styles.inputLabel}>Complete Shipping Address *</Text>
+                      <TextInput
+                        style={[styles.formInput, { height: 70, textAlignVertical: 'top' }]}
+                        placeholder="House/Flat No, Street, City, State, Pincode"
+                        placeholderTextColor="#9CA3AF"
+                        multiline
+                        value={shippingAddress}
+                        onChangeText={setShippingAddress}
+                      />
+
+                      {/* Payment Selection */}
+                      <View style={{ marginTop: 20 }}>
+                        <Text style={styles.formSectionTitle}>Payment Mode</Text>
+                        <View style={styles.paymentMethodRow}>
+                          <TouchableOpacity
+                            style={[
+                              styles.paymentOptionBtn,
+                              paymentMethod === 'razorpay' && styles.paymentOptionBtnActive,
+                            ]}
+                            onPress={() => setPaymentMethod('razorpay')}
+                          >
+                            <Text
+                              style={[
+                                styles.paymentOptionText,
+                                paymentMethod === 'razorpay' && styles.paymentOptionTextActive,
+                              ]}
+                            >
+                              💳 Razorpay (UPI/Cards)
+                            </Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.paymentOptionBtn,
+                              paymentMethod === 'cod' && styles.paymentOptionBtnActive,
+                            ]}
+                            onPress={() => setPaymentMethod('cod')}
+                          >
+                            <Text
+                              style={[
+                                styles.paymentOptionText,
+                                paymentMethod === 'cod' && styles.paymentOptionTextActive,
+                              ]}
+                            >
+                              💵 Cash on Delivery
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      {/* Cart Order Summary */}
+                      <View style={styles.cartFooter}>
+                        <View style={styles.summaryRow}>
+                          <Text style={styles.summaryLabel}>Total Payable Amount:</Text>
+                          <Text style={styles.totalValue}>₹{totalCartPrice.toLocaleString()}</Text>
+                        </View>
+
+                        <TouchableOpacity
+                          style={styles.placeOrderBtn}
+                          onPress={handleCheckoutInitiation}
+                          disabled={orderPlaced}
+                        >
+                          {orderPlaced ? (
+                            <ActivityIndicator color="#FFFFFF" />
+                          ) : (
+                            <Text style={styles.placeOrderBtnText}>
+                              Proceed to Pay ₹{totalCartPrice.toLocaleString()} ➔
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
                 </View>
               </ScrollView>
             )}
@@ -2109,6 +2131,40 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     textAlign: 'center',
     marginTop: 4,
+  },
+  guestGuardCard: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    marginVertical: 10,
+  },
+  guestGuardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#92400E',
+    textAlign: 'center',
+  },
+  guestGuardSub: {
+    fontSize: 12,
+    color: '#78350F',
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  guestAuthBtn: {
+    marginTop: 14,
+    backgroundColor: '#D97706',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  guestAuthBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
   formSectionTitle: {
     fontSize: 13,
