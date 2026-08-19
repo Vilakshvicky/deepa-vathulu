@@ -29,6 +29,7 @@ import {
   X,
   Image as ImageIcon,
   CheckCircle2,
+  Mail,
 } from 'lucide-react';
 
 interface Product {
@@ -46,6 +47,7 @@ interface Order {
   id: string;
   customer_name: string;
   customer_phone?: string;
+  customer_email?: string;
   shipping_address?: string;
   payment_method?: string;
   items_summary?: string;
@@ -268,7 +270,8 @@ export default function AdminDashboard() {
     (o) =>
       o.id.toLowerCase().includes(searchOrder.toLowerCase()) ||
       o.customer_name.toLowerCase().includes(searchOrder.toLowerCase()) ||
-      (o.customer_phone && o.customer_phone.includes(searchOrder))
+      (o.customer_phone && o.customer_phone.includes(searchOrder)) ||
+      (o.customer_email && o.customer_email.toLowerCase().includes(searchOrder.toLowerCase()))
   );
 
   // If NOT authenticated, render Security PIN Screen
@@ -516,12 +519,17 @@ export default function AdminDashboard() {
                     className="bg-stone-950 border border-stone-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4"
                   >
                     <div className="space-y-1">
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
                         <span className="font-mono font-bold text-amber-400 text-sm">{order.id}</span>
                         <span className="text-xs font-bold text-stone-200">{order.customer_name}</span>
                         {order.customer_phone && (
                           <span className="text-[11px] text-stone-400 font-mono flex items-center gap-1">
                             <Phone className="w-3 h-3 text-stone-500" /> {order.customer_phone}
+                          </span>
+                        )}
+                        {order.customer_email && (
+                          <span className="text-[11px] text-stone-400 font-mono flex items-center gap-1">
+                            <Mail className="w-3 h-3 text-stone-500" /> {order.customer_email}
                           </span>
                         )}
                       </div>
@@ -702,12 +710,17 @@ export default function AdminDashboard() {
                   className="bg-stone-950 border border-stone-800 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4"
                 >
                   <div className="space-y-1.5">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="font-mono font-bold text-amber-400 text-sm">{order.id}</span>
                       <span className="text-sm font-bold text-stone-100">{order.customer_name}</span>
                       {order.customer_phone && (
                         <span className="text-xs text-stone-400 font-mono flex items-center gap-1">
                           <Phone className="w-3.5 h-3.5 text-stone-500" /> {order.customer_phone}
+                        </span>
+                      )}
+                      {order.customer_email && (
+                        <span className="text-xs text-stone-400 font-mono flex items-center gap-1">
+                          <Mail className="w-3.5 h-3.5 text-stone-500" /> {order.customer_email}
                         </span>
                       )}
                     </div>

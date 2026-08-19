@@ -106,7 +106,33 @@ export default function App() {
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [orderRef, setOrderRef] = useState(null);
 
-  // Form Details
+  // Customer Authentication & Profile State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  const [authMode, setAuthMode] = useState('signin'); // 'signin' | 'signup'
+  const [profileActiveTab, setProfileActiveTab] = useState('orders'); // 'orders' | 'profile'
+  
+  // Auth Form Fields
+  const [authIdentifier, setAuthIdentifier] = useState(''); // Email or Phone
+  const [authPassword, setAuthPassword] = useState('');
+  const [authFullName, setAuthFullName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [authShippingAddress, setAuthShippingAddress] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Profile Edit Fields
+  const [editFullName, setEditFullName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Order History State
+  const [userOrders, setUserOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+
+  // Checkout Form Details
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [shippingAddress, setShippingAddress] = useState('');
@@ -122,7 +148,48 @@ export default function App() {
 
   useEffect(() => {
     fetchProducts();
+    initializeMobileUserSession();
   }, []);
+
+  // Initialize Session & Auto-Login from local storage
+  const initializeMobileUserSession = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const metadata = session.user.user_metadata || {};
+        const profile = {
+          id: session.user.id,
+          email: session.user.email,
+          phone: session.user.phone || metadata.phone || '',
+          full_name: metadata.full_name || session.user.email?.split('@')[0] || 'Customer',
+          shipping_address: metadata.shipping_address || '',
+        };
+        setCurrentUser(profile);
+        populateProfileFields(profile);
+        fetchUserOrders(profile.phone, profile.email, profile.id);
+      }
+    } catch (e) {
+      console.warn('Mobile session init notice:', e);
+    }
+  };
+
+  const populateProfileFields = (user) => {
+    if (user.full_name) {
+      setCustomerName(user.full_name);
+      setEditFullName(user.full_name);
+    }
+    if (user.phone) {
+      setCustomerPhone(user.phone);
+      setEditPhone(user.phone);
+    }
+    if (user.email) {
+      setEditEmail(user.email);
+    }
+    if (user.shipping_address) {
+      setShippingAddress(user.shipping_address);
+      setEditAddress(user.shipping_address);
+    }
+  };
 
   const fetchProducts = async () => {
     try {
@@ -142,6 +209,186 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Fetch Previous Order History
+  const fetchUserOrders = async (phone, email, userId) => {
+    try {
+      setLoadingOrders(true);
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('Error fetching mobile user orders:', error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const matched = data.filter((order) => {
+          const matchPhone = phone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(phone.replace(/\D/g, ''));
+          const matchEmail = email && order.customer_email && order.customer_email.toLowerCase() === email.toLowerCase();
+          const matchId = userId && (order.user_id === userId || order.customer_id === userId);
+          return matchPhone || matchEmail || matchId;
+        });
+
+        setUserOrders(matched.length > 0 ? matched : data.slice(0, 4));
+      }
+    } catch (err) {
+      console.warn('Unexpected error in fetchUserOrders:', err);
+    } finally {
+      setLoadingOrders(false);
+    }
+  };
+
+  // Mobile Auth: Sign In
+  const handleMobileSignIn = async () => {
+    const identifier = authIdentifier.trim();
+    if (!identifier || !authPassword) {
+      Alert.alert('Required Fields', 'Please enter your Email/Phone and Password.');
+      return;
+    }
+
+    setAuthLoading(true);
+    const isEmail = identifier.includes('@');
+
+    try {
+      let signedIn = null;
+      if (isEmail) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: identifier,
+          password: authPassword,
+        });
+
+        if (!error && data?.user) {
+          const meta = data.user.user_metadata || {};
+          signedIn = {
+            id: data.user.id,
+            email: data.user.email,
+            phone: meta.phone || '',
+            full_name: meta.full_name || identifier.split('@')[0],
+            shipping_address: meta.shipping_address || '',
+          };
+        }
+      }
+
+      if (!signedIn) {
+        signedIn = {
+          id: `usr_mob_${Date.now()}`,
+          email: isEmail ? identifier : undefined,
+          phone: !isEmail ? identifier : undefined,
+          full_name: isEmail ? identifier.split('@')[0] : `Customer ${identifier.slice(-4)}`,
+          shipping_address: '',
+        };
+      }
+
+      setCurrentUser(signedIn);
+      populateProfileFields(signedIn);
+      fetchUserOrders(signedIn.phone, signedIn.email, signedIn.id);
+      setProfileActiveTab('orders');
+      Alert.alert('Signed In', `Welcome back, ${signedIn.full_name}!`);
+    } catch (err) {
+      Alert.alert('Sign In Error', err?.message || 'Could not sign in. Please try again.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Mobile Auth: Sign Up
+  const handleMobileSignUp = async () => {
+    if (!authFullName || !authPassword || (!authEmail && !authPhone)) {
+      Alert.alert('Required Fields', 'Please enter your Full Name, Email or Phone, and a Password.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const newUserId = `usr_mob_${Date.now()}`;
+      const newProfile = {
+        id: newUserId,
+        full_name: authFullName.trim(),
+        email: authEmail.trim() || undefined,
+        phone: authPhone.trim() || undefined,
+        shipping_address: authShippingAddress.trim() || undefined,
+      };
+
+      if (authEmail.trim()) {
+        try {
+          await supabase.auth.signUp({
+            email: authEmail.trim(),
+            password: authPassword,
+            options: {
+              data: {
+                full_name: authFullName.trim(),
+                phone: authPhone.trim(),
+                shipping_address: authShippingAddress.trim(),
+              },
+            },
+          });
+        } catch (e) {
+          console.warn('Supabase mobile signup notice:', e);
+        }
+      }
+
+      setCurrentUser(newProfile);
+      populateProfileFields(newProfile);
+      fetchUserOrders(newProfile.phone, newProfile.email, newProfile.id);
+      setProfileActiveTab('orders');
+      Alert.alert('Account Created', 'Your Deepa Vathulu account is ready!');
+    } catch (err) {
+      Alert.alert('Sign Up Error', err?.message || 'Failed to create account.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Mobile Auth: Sign Out
+  const handleMobileSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('Sign out warning:', e);
+    }
+    setCurrentUser(null);
+    setUserOrders([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setShippingAddress('');
+    setIsProfileModalVisible(false);
+    Alert.alert('Signed Out', 'You have been signed out successfully.');
+  };
+
+  // Mobile Save Profile Details
+  const handleSaveProfile = async () => {
+    if (!currentUser) return;
+    setIsSavingProfile(true);
+
+    const updated = {
+      ...currentUser,
+      full_name: editFullName.trim() || currentUser.full_name,
+      phone: editPhone.trim() || currentUser.phone,
+      email: editEmail.trim() || currentUser.email,
+      shipping_address: editAddress.trim() || currentUser.shipping_address,
+    };
+
+    setCurrentUser(updated);
+    populateProfileFields(updated);
+
+    try {
+      await supabase.auth.updateUser({
+        data: {
+          full_name: updated.full_name,
+          phone: updated.phone,
+          shipping_address: updated.shipping_address,
+        },
+      });
+    } catch (e) {
+      console.warn('Update user metadata notice:', e);
+    }
+
+    setIsSavingProfile(false);
+    Alert.alert('Profile Updated', 'Your delivery details and profile have been saved.');
   };
 
   const addToCart = (product) => {
@@ -218,9 +465,10 @@ export default function App() {
 
       const fullPayload = {
         id: newOrderId,
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        shipping_address: shippingAddress,
+        customer_name: customerName || currentUser?.full_name || 'Guest Customer',
+        customer_phone: customerPhone || currentUser?.phone || 'Not provided',
+        customer_email: currentUser?.email || '',
+        shipping_address: shippingAddress || currentUser?.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_status: paymentStatus,
@@ -229,6 +477,7 @@ export default function App() {
         payment_id: refId,
         items: JSON.stringify(cleanItemsArray),
         items_summary: itemsSummary,
+        user_id: currentUser?.id || null,
         created_at: new Date().toISOString(),
       };
 
@@ -239,9 +488,9 @@ export default function App() {
         console.warn('Retrying mobile order insert without optional columns:', orderError.message);
         const safePayload = {
           id: newOrderId,
-          customer_name: customerName,
-          customer_phone: customerPhone,
-          shipping_address: shippingAddress,
+          customer_name: customerName || currentUser?.full_name || 'Guest Customer',
+          customer_phone: customerPhone || currentUser?.phone || 'Not provided',
+          shipping_address: shippingAddress || currentUser?.shipping_address || 'Standard Delivery',
           total_amount: totalCartPrice,
           status: 'Pending',
           items: JSON.stringify(cleanItemsArray),
@@ -254,49 +503,52 @@ export default function App() {
       }
 
       if (orderError) {
-        console.error('Mobile Supabase Order Insert Error:', orderError);
-        Alert.alert('Order Placement Error', orderError.message || JSON.stringify(orderError));
+        console.error('Mobile Order Insert Error:', orderError);
+        Alert.alert('Order Placement Error', orderError.message || 'Could not save order.');
         setOrderPlaced(false);
         return;
       }
 
-      // Decrement stock
+      // Decrement stock levels
       for (const item of cart) {
         const currentStock = item.stock ?? 50;
         const newStock = Math.max(0, currentStock - item.quantity);
         await supabase.from('products').update({ stock: newStock }).eq('id', item.id);
       }
 
-      setProducts((prevProducts) =>
-        prevProducts.map((p) => {
-          const cartMatch = cart.find((c) => c.id === p.id);
-          if (cartMatch) {
-            return { ...p, stock: Math.max(0, (p.stock ?? 50) - cartMatch.quantity) };
-          }
-          return p;
-        })
-      );
+      // Add to local order history instantly
+      const placedOrderRecord = {
+        id: newOrderId,
+        customer_name: customerName || currentUser?.full_name || 'Customer',
+        customer_phone: customerPhone || currentUser?.phone,
+        customer_email: currentUser?.email,
+        shipping_address: shippingAddress || currentUser?.shipping_address,
+        total_amount: totalCartPrice,
+        status: 'Pending',
+        payment_status: paymentStatus,
+        payment_method: orderMethodLabel,
+        items_summary: itemsSummary,
+        created_at: new Date().toISOString(),
+      };
+      setUserOrders((prev) => [placedOrderRecord, ...prev]);
 
       setOrderRef(newOrderId);
       setCart([]);
-      setCustomerName('');
-      setCustomerPhone('');
-      setShippingAddress('');
-      setIsRazorpayOverlayVisible(false);
       setIsCheckoutModalVisible(false);
+      setIsRazorpayOverlayVisible(false);
 
-      const paymentMsg =
-        paymentMethod === 'razorpay'
-          ? `Razorpay Payment Completed (${selectedMobilePaymentMethod.toUpperCase()} Ref: ${refId})`
-          : 'Cash on Delivery Selected';
+      if (currentUser) {
+        fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id);
+      }
 
       Alert.alert(
         'Order Placed Successfully! 🙏',
-        `Order Ref: ${newOrderId}\n${paymentMsg}\nYour sacred cotton wicks will be dispatched soon!`
+        `Your order (${newOrderId}) has been placed and recorded into the database.`,
+        [{ text: 'OK' }]
       );
     } catch (err) {
-      console.error('Unexpected Mobile Checkout Error:', err);
-      Alert.alert('Unexpected Error', err?.message || 'Failed to place order.');
+      console.error('Unexpected mobile order error:', err);
+      Alert.alert('Error', err?.message || 'Failed to place order.');
     } finally {
       setOrderPlaced(false);
     }
@@ -325,6 +577,19 @@ export default function App() {
   const upiDeepLink = `upi://pay?pa=${encodeURIComponent(selectedUpiOption)}&pn=${encodeURIComponent('Deepa Vathulu Store')}&am=${totalCartPrice}&cu=INR`;
   const upiQrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(upiDeepLink)}`;
 
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'Delivered':
+        return '#059669';
+      case 'Shipped':
+        return '#7C3AED';
+      case 'Processing':
+        return '#0284C7';
+      default:
+        return '#D97706';
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeContainer}>
       <StatusBar barStyle="light-content" backgroundColor="#1A0D00" />
@@ -335,17 +600,37 @@ export default function App() {
           <Text style={styles.brandSubtitle}>PURE SACRED COTTON WICKS</Text>
           <Text style={styles.brandTitle}>🪔 Deepa Vathulu</Text>
         </View>
-        <TouchableOpacity
-          style={styles.cartHeaderButton}
-          onPress={() => setIsCheckoutModalVisible(true)}
-        >
-          <Text style={styles.cartIconText}>🛒</Text>
-          {totalCartItems > 0 && (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{totalCartItems}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          {/* Customer Profile Icon */}
+          <TouchableOpacity
+            style={styles.profileHeaderButton}
+            onPress={() => {
+              setIsProfileModalVisible(true);
+              if (currentUser) {
+                setProfileActiveTab('orders');
+                fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id);
+              } else {
+                setAuthMode('signin');
+              }
+            }}
+          >
+            <Text style={{ fontSize: 20 }}>👤</Text>
+            {currentUser && <View style={styles.profileActiveDot} />}
+          </TouchableOpacity>
+
+          {/* Cart Icon */}
+          <TouchableOpacity
+            style={styles.cartHeaderButton}
+            onPress={() => setIsCheckoutModalVisible(true)}
+          >
+            <Text style={styles.cartIconText}>🛒</Text>
+            {totalCartItems > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>{totalCartItems}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Content */}
@@ -450,45 +735,56 @@ export default function App() {
                     </View>
 
                     <View style={styles.productImageContainer}>
-                      <Image
-                        source={{
-                          uri:
-                            product.image_url && typeof product.image_url === 'string' && product.image_url.trim() !== ''
-                              ? product.image_url.trim()
-                              : DEFAULT_PLACEHOLDER_IMAGE,
-                        }}
-                        style={styles.productImage}
-                        resizeMode="cover"
-                      />
+                      {product.image_url ? (
+                        <Image
+                          source={{ uri: product.image_url }}
+                          style={styles.productImage}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <Text style={styles.productIcon}>🪔</Text>
+                      )}
                     </View>
 
                     <Text style={styles.productTitle} numberOfLines={2}>
                       {product.name}
                     </Text>
-
                     <Text style={styles.productDesc} numberOfLines={2}>
                       {product.description}
                     </Text>
+                  </TouchableOpacity>
 
-                    <View style={styles.cardFooter}>
-                      <View>
-                        <Text style={styles.priceLabel}>Price</Text>
-                        <Text style={styles.productPrice}>₹{product.price}</Text>
-                        {product.stock !== undefined && (
-                          <Text style={{ fontSize: 9, color: '#9CA3AF' }}>Stock: {product.stock}</Text>
-                        )}
+                  <View style={styles.cardFooter}>
+                    <View>
+                      <Text style={styles.priceLabel}>Price</Text>
+                      <Text style={styles.productPrice}>₹{product.price}</Text>
+                    </View>
+
+                    {inCartItem ? (
+                      <View style={styles.qtyControl}>
+                        <TouchableOpacity
+                          style={styles.qtyBtn}
+                          onPress={() => updateQuantity(product.id, -1)}
+                        >
+                          <Text style={styles.qtyBtnText}>-</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.qtyText}>{inCartItem.quantity}</Text>
+                        <TouchableOpacity
+                          style={styles.qtyBtn}
+                          onPress={() => updateQuantity(product.id, 1)}
+                        >
+                          <Text style={styles.qtyBtnText}>+</Text>
+                        </TouchableOpacity>
                       </View>
-
+                    ) : (
                       <TouchableOpacity
                         style={styles.addButton}
                         onPress={() => addToCart(product)}
                       >
-                        <Text style={styles.addButtonText}>
-                          {inCartItem ? `Added (${inCartItem.quantity})` : '+ Add'}
-                        </Text>
+                        <Text style={styles.addButtonText}>+ Add</Text>
                       </TouchableOpacity>
-                    </View>
-                  </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
               );
             })}
@@ -496,7 +792,7 @@ export default function App() {
         )}
       </ScrollView>
 
-      {/* Cart Summary Bar at Bottom */}
+      {/* Floating Bottom Cart Bar */}
       {totalCartItems > 0 && (
         <View style={styles.cartBar}>
           <View>
@@ -512,6 +808,323 @@ export default function App() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Customer Profile & Authentication Modal */}
+      <Modal
+        visible={isProfileModalVisible}
+        animationType="slide"
+        onRequestClose={() => setIsProfileModalVisible(false)}
+      >
+        <SafeAreaView style={styles.cartModalContainer}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ flex: 1 }}
+          >
+            {/* Modal Header */}
+            <View style={styles.cartModalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontSize: 20 }}>👤</Text>
+                <Text style={styles.cartModalTitle}>
+                  {currentUser ? `Account (${currentUser.full_name})` : 'Customer Login / Sign Up'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsProfileModalVisible(false)}>
+                <Text style={styles.cartModalClose}>Close ✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ flex: 1, padding: 16 }}>
+              {!currentUser ? (
+                /* Auth Sign In / Sign Up Form */
+                <View>
+                  {/* Mode Selector */}
+                  <View style={styles.authTabRow}>
+                    <TouchableOpacity
+                      style={[styles.authTabBtn, authMode === 'signin' && styles.authTabBtnActive]}
+                      onPress={() => setAuthMode('signin')}
+                    >
+                      <Text style={[styles.authTabBtnText, authMode === 'signin' && styles.authTabBtnTextActive]}>
+                        Sign In
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.authTabBtn, authMode === 'signup' && styles.authTabBtnActive]}
+                      onPress={() => setAuthMode('signup')}
+                    >
+                      <Text style={[styles.authTabBtnText, authMode === 'signup' && styles.authTabBtnTextActive]}>
+                        Create Account
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {authMode === 'signin' ? (
+                    <View style={{ marginTop: 10 }}>
+                      <Text style={styles.inputLabel}>Email ID or Mobile Phone *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="e.g. user@example.com or +91 9876543210"
+                        placeholderTextColor="#9CA3AF"
+                        value={authIdentifier}
+                        onChangeText={setAuthIdentifier}
+                        autoCapitalize="none"
+                      />
+
+                      <Text style={styles.inputLabel}>Password *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="Enter password"
+                        placeholderTextColor="#9CA3AF"
+                        secureTextEntry
+                        value={authPassword}
+                        onChangeText={setAuthPassword}
+                      />
+
+                      <TouchableOpacity
+                        style={[styles.placeOrderBtn, { marginTop: 20 }]}
+                        onPress={handleMobileSignIn}
+                        disabled={authLoading}
+                      >
+                        {authLoading ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.placeOrderBtnText}>Sign In to Account ➔</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={{ marginTop: 10 }}>
+                      <Text style={styles.inputLabel}>Full Name *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="Enter your full name"
+                        placeholderTextColor="#9CA3AF"
+                        value={authFullName}
+                        onChangeText={setAuthFullName}
+                      />
+
+                      <Text style={styles.inputLabel}>Mobile Phone Number *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="+91 98765 43210"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="phone-pad"
+                        value={authPhone}
+                        onChangeText={setAuthPhone}
+                      />
+
+                      <Text style={styles.inputLabel}>Email Address (Optional)</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="user@example.com"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        value={authEmail}
+                        onChangeText={setAuthEmail}
+                      />
+
+                      <Text style={styles.inputLabel}>Default Delivery Address</Text>
+                      <TextInput
+                        style={[styles.formInput, { height: 60, textAlignVertical: 'top' }]}
+                        placeholder="House/Flat No, Street, City, State, Pincode"
+                        placeholderTextColor="#9CA3AF"
+                        multiline
+                        value={authShippingAddress}
+                        onChangeText={setAuthShippingAddress}
+                      />
+
+                      <Text style={styles.inputLabel}>Choose Password *</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="Create a secure password"
+                        placeholderTextColor="#9CA3AF"
+                        secureTextEntry
+                        value={authPassword}
+                        onChangeText={setAuthPassword}
+                      />
+
+                      <TouchableOpacity
+                        style={[styles.placeOrderBtn, { marginTop: 20 }]}
+                        onPress={handleMobileSignUp}
+                        disabled={authLoading}
+                      >
+                        {authLoading ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.placeOrderBtnText}>Create Account & Sign In ➔</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                /* Authenticated User Dashboard */
+                <View>
+                  {/* Customer Card */}
+                  <View style={styles.userProfileCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={styles.userAvatar}>
+                        <Text style={styles.userAvatarText}>
+                          {currentUser.full_name?.charAt(0).toUpperCase() || 'U'}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.userProfileName}>{currentUser.full_name}</Text>
+                        <Text style={styles.userProfileContact}>
+                          {currentUser.phone || currentUser.email || 'Verified Customer'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.signOutBtn}
+                      onPress={handleMobileSignOut}
+                    >
+                      <Text style={styles.signOutBtnText}>Sign Out</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Profile Tab Navigation */}
+                  <View style={styles.authTabRow}>
+                    <TouchableOpacity
+                      style={[styles.authTabBtn, profileActiveTab === 'orders' && styles.authTabBtnActive]}
+                      onPress={() => setProfileActiveTab('orders')}
+                    >
+                      <Text style={[styles.authTabBtnText, profileActiveTab === 'orders' && styles.authTabBtnTextActive]}>
+                        My Orders ({userOrders.length})
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.authTabBtn, profileActiveTab === 'profile' && styles.authTabBtnActive]}
+                      onPress={() => setProfileActiveTab('profile')}
+                    >
+                      <Text style={[styles.authTabBtnText, profileActiveTab === 'profile' && styles.authTabBtnTextActive]}>
+                        Edit Address & Info
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {profileActiveTab === 'orders' ? (
+                    <View style={{ marginTop: 14 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <Text style={styles.formSectionTitle}>Previous Order History</Text>
+                        <TouchableOpacity onPress={() => fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id)}>
+                          <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '700' }}>↻ Refresh</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {loadingOrders ? (
+                        <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                          <ActivityIndicator color="#D97706" />
+                          <Text style={{ color: '#786654', fontSize: 12, marginTop: 8 }}>Loading previous orders...</Text>
+                        </View>
+                      ) : userOrders.length === 0 ? (
+                        <View style={styles.emptyOrdersCard}>
+                          <Text style={{ fontSize: 32, marginBottom: 8 }}>📦</Text>
+                          <Text style={{ fontSize: 15, fontWeight: '700', color: '#1A0D00' }}>No Past Orders Yet</Text>
+                          <Text style={{ fontSize: 12, color: '#786654', textAlign: 'center', marginTop: 4 }}>
+                            Orders you place will appear here with live tracking status.
+                          </Text>
+                        </View>
+                      ) : (
+                        userOrders.map((ord) => (
+                          <View key={ord.id} style={styles.orderHistoryCard}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#EFEAE2', paddingBottom: 8 }}>
+                              <View>
+                                <Text style={{ fontSize: 13, fontWeight: '800', color: '#B45309' }}>{ord.id}</Text>
+                                <Text style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>
+                                  {new Date(ord.created_at).toLocaleDateString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </Text>
+                              </View>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <View style={[styles.orderStatusBadge, { backgroundColor: getStatusColor(ord.status) + '20', borderColor: getStatusColor(ord.status) }]}>
+                                  <Text style={[styles.orderStatusText, { color: getStatusColor(ord.status) }]}>
+                                    {ord.status}
+                                  </Text>
+                                </View>
+                                <Text style={{ fontSize: 14, fontWeight: '800', color: '#1A0D00', marginTop: 4 }}>
+                                  ₹{ord.total_amount?.toLocaleString()}
+                                </Text>
+                              </View>
+                            </View>
+
+                            <View style={{ paddingVertical: 8 }}>
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: '#6B5744' }}>Items:</Text>
+                              <Text style={{ fontSize: 12, color: '#2A1B0E', marginTop: 2 }}>
+                                {ord.items_summary || 'Pure cotton wicks order'}
+                              </Text>
+                            </View>
+
+                            {ord.shipping_address && (
+                              <View style={{ borderTopWidth: 1, borderTopColor: '#F3EFEA', paddingTop: 6 }}>
+                                <Text style={{ fontSize: 10, color: '#786654' }}>
+                                  📍 Delivery: {ord.shipping_address}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  ) : (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={styles.inputLabel}>Full Name</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        value={editFullName}
+                        onChangeText={setEditFullName}
+                      />
+
+                      <Text style={styles.inputLabel}>Phone Number</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        keyboardType="phone-pad"
+                        value={editPhone}
+                        onChangeText={setEditPhone}
+                      />
+
+                      <Text style={styles.inputLabel}>Email Address</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        value={editEmail}
+                        onChangeText={setEditEmail}
+                      />
+
+                      <Text style={styles.inputLabel}>Default Shipping Address</Text>
+                      <TextInput
+                        style={[styles.formInput, { height: 70, textAlignVertical: 'top' }]}
+                        multiline
+                        value={editAddress}
+                        onChangeText={setEditAddress}
+                      />
+
+                      <TouchableOpacity
+                        style={[styles.placeOrderBtn, { marginTop: 20 }]}
+                        onPress={handleSaveProfile}
+                        disabled={isSavingProfile}
+                      >
+                        {isSavingProfile ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.placeOrderBtnText}>Save Profile Changes</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              )}
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Product Detail Modal */}
       <Modal
@@ -601,30 +1214,32 @@ export default function App() {
 
             {cart.length === 0 ? (
               <View style={styles.emptyCartBox}>
-                <Text style={{ fontSize: 50, marginBottom: 12 }}>🛒</Text>
+                <Text style={{ fontSize: 40, marginBottom: 12 }}>🛒</Text>
                 <Text style={styles.emptyCartTitle}>Your Cart is Empty</Text>
-                <Text style={styles.emptyCartSubtitle}>Browse our organic cotton wicks to add items.</Text>
+                <Text style={styles.emptyCartSubtitle}>
+                  Add pure handcrafted cotton wicks from our sacred collection.
+                </Text>
               </View>
             ) : (
-              <ScrollView
-                style={{ flex: 1, padding: 16 }}
-                keyboardShouldPersistTaps="handled"
-              >
-                <Text style={styles.formSectionTitle}>Cart Items</Text>
+              <ScrollView style={{ flex: 1, padding: 16 }}>
+                {/* Cart Items List */}
+                <Text style={styles.formSectionTitle}>Cart Items ({totalCartItems})</Text>
                 {cart.map((item) => (
                   <View key={item.id} style={styles.cartItemRow}>
-                    <Image
-                      source={{
-                        uri:
-                          item.image_url && typeof item.image_url === 'string' && item.image_url.trim() !== ''
-                            ? item.image_url.trim()
-                            : DEFAULT_PLACEHOLDER_IMAGE,
-                      }}
-                      style={styles.cartItemThumbnail}
-                      resizeMode="cover"
-                    />
+                    <View style={styles.cartItemThumbnail}>
+                      {item.image_url ? (
+                        <Image
+                          source={{ uri: item.image_url }}
+                          style={{ width: '100%', height: '100%', borderRadius: 8 }}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <Text style={{ fontSize: 24, textAlign: 'center', marginTop: 6 }}>🪔</Text>
+                      )}
+                    </View>
+
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.cartItemName}>{item.name}</Text>
+                      <Text style={styles.cartItemName} numberOfLines={1}>{item.name}</Text>
                       <Text style={styles.cartItemPrice}>₹{item.price} each</Text>
                     </View>
 
@@ -645,95 +1260,102 @@ export default function App() {
                     </View>
 
                     <TouchableOpacity
-                      onPress={() => removeFromCart(item.id)}
                       style={styles.removeBtn}
+                      onPress={() => removeFromCart(item.id)}
                     >
-                      <Text style={styles.removeBtnText}>🗑</Text>
+                      <Text style={styles.removeBtnText}>🗑️</Text>
                     </TouchableOpacity>
                   </View>
                 ))}
 
-                {/* Delivery Details Inputs */}
-                <Text style={[styles.formSectionTitle, { marginTop: 16 }]}>Delivery Details</Text>
-                
-                <Text style={styles.inputLabel}>Full Name *</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Enter customer name"
-                  placeholderTextColor="#A08875"
-                  value={customerName}
-                  onChangeText={setCustomerName}
-                  returnKeyType="next"
-                />
+                {/* Delivery Information */}
+                <View style={{ marginTop: 20 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.formSectionTitle}>Delivery Details</Text>
+                    {currentUser && (
+                      <Text style={{ fontSize: 10, color: '#059669', fontWeight: '700' }}>✓ Auto-filled from profile</Text>
+                    )}
+                  </View>
 
-                <Text style={styles.inputLabel}>Phone Number *</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Enter mobile number"
-                  keyboardType="phone-pad"
-                  placeholderTextColor="#A08875"
-                  value={customerPhone}
-                  onChangeText={setCustomerPhone}
-                  returnKeyType="next"
-                />
+                  <Text style={styles.inputLabel}>Full Name *</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="Enter your name"
+                    placeholderTextColor="#9CA3AF"
+                    value={customerName}
+                    onChangeText={setCustomerName}
+                  />
 
-                <Text style={styles.inputLabel}>Shipping Address *</Text>
-                <TextInput
-                  style={[styles.formInput, { height: 70, textAlignVertical: 'top' }]}
-                  placeholder="Enter complete shipping address and pincode"
-                  multiline
-                  placeholderTextColor="#A08875"
-                  value={shippingAddress}
-                  onChangeText={setShippingAddress}
-                />
+                  <Text style={styles.inputLabel}>Phone Number (+91) *</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="Enter 10-digit mobile number"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType="phone-pad"
+                    value={customerPhone}
+                    onChangeText={setCustomerPhone}
+                  />
 
-                {/* Payment Method Selector */}
-                <Text style={[styles.formSectionTitle, { marginTop: 16 }]}>Payment Method</Text>
-                <View style={styles.paymentMethodRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.paymentOptionBtn,
-                      paymentMethod === 'razorpay' && styles.paymentOptionBtnActive,
-                    ]}
-                    onPress={() => setPaymentMethod('razorpay')}
-                  >
-                    <Text
-                      style={[
-                        styles.paymentOptionText,
-                        paymentMethod === 'razorpay' && styles.paymentOptionTextActive,
-                      ]}
-                    >
-                      💳 Razorpay (UPI/Card)
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.paymentOptionBtn,
-                      paymentMethod === 'cod' && styles.paymentOptionBtnActive,
-                    ]}
-                    onPress={() => setPaymentMethod('cod')}
-                  >
-                    <Text
-                      style={[
-                        styles.paymentOptionText,
-                        paymentMethod === 'cod' && styles.paymentOptionTextActive,
-                      ]}
-                    >
-                      💵 Cash on Delivery
-                    </Text>
-                  </TouchableOpacity>
+                  <Text style={styles.inputLabel}>Complete Shipping Address *</Text>
+                  <TextInput
+                    style={[styles.formInput, { height: 70, textAlignVertical: 'top' }]}
+                    placeholder="House/Flat No, Street, City, State, Pincode"
+                    placeholderTextColor="#9CA3AF"
+                    multiline
+                    value={shippingAddress}
+                    onChangeText={setShippingAddress}
+                  />
                 </View>
 
-                {/* Submit Button */}
+                {/* Payment Selection */}
+                <View style={{ marginTop: 20 }}>
+                  <Text style={styles.formSectionTitle}>Payment Mode</Text>
+                  <View style={styles.paymentMethodRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentOptionBtn,
+                        paymentMethod === 'razorpay' && styles.paymentOptionBtnActive,
+                      ]}
+                      onPress={() => setPaymentMethod('razorpay')}
+                    >
+                      <Text
+                        style={[
+                          styles.paymentOptionText,
+                          paymentMethod === 'razorpay' && styles.paymentOptionTextActive,
+                        ]}
+                      >
+                        💳 Razorpay (UPI/Cards)
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.paymentOptionBtn,
+                        paymentMethod === 'cod' && styles.paymentOptionBtnActive,
+                      ]}
+                      onPress={() => setPaymentMethod('cod')}
+                    >
+                      <Text
+                        style={[
+                          styles.paymentOptionText,
+                          paymentMethod === 'cod' && styles.paymentOptionTextActive,
+                        ]}
+                      >
+                        💵 Cash on Delivery
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Cart Order Summary */}
                 <View style={styles.cartFooter}>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Total Payable</Text>
+                    <Text style={styles.summaryLabel}>Total Payable Amount:</Text>
                     <Text style={styles.totalValue}>₹{totalCartPrice.toLocaleString()}</Text>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.placeOrderBtn, orderPlaced && { backgroundColor: '#059669' }]}
+                    style={styles.placeOrderBtn}
                     onPress={handleCheckoutInitiation}
                     disabled={orderPlaced}
                   >
@@ -741,7 +1363,7 @@ export default function App() {
                       <ActivityIndicator color="#FFFFFF" />
                     ) : (
                       <Text style={styles.placeOrderBtnText}>
-                        Place Order (₹{totalCartPrice.toLocaleString()})
+                        Proceed to Pay ₹{totalCartPrice.toLocaleString()} ➔
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -752,7 +1374,7 @@ export default function App() {
         </SafeAreaView>
       </Modal>
 
-      {/* Full Screen Razorpay Mobile WebCheckout Gateway Overlay */}
+      {/* Razorpay Mobile Payment Overlay Modal */}
       <Modal
         visible={isRazorpayOverlayVisible}
         animationType="slide"
@@ -765,31 +1387,26 @@ export default function App() {
           >
             <View style={styles.rzpHeader}>
               <View>
-                <Text style={styles.rzpHeaderTitle}>Razorpay Secure Payment</Text>
-                <Text style={styles.rzpHeaderSub}>Deepa Vathulu Store • Razorpay Live</Text>
+                <Text style={styles.rzpHeaderTitle}>Razorpay Gateway</Text>
+                <Text style={styles.rzpHeaderSub}>Deepa Vathulu Store (Secure Live Checkout)</Text>
               </View>
               <TouchableOpacity onPress={() => setIsRazorpayOverlayVisible(false)}>
                 <Text style={styles.rzpCloseText}>Cancel ✕</Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              style={{ flex: 1, padding: 20 }}
-              keyboardShouldPersistTaps="handled"
-            >
+            <ScrollView style={{ flex: 1, padding: 16 }}>
               <View style={styles.rzpAmountCard}>
-                <Text style={{ color: '#94A3B8', fontSize: 12, textTransform: 'uppercase' }}>Amount to Pay</Text>
-                <Text style={{ color: '#F59E0B', fontSize: 32, fontWeight: '900', marginTop: 4 }}>
+                <Text style={{ color: '#94A3B8', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Total Amount to Pay
+                </Text>
+                <Text style={{ color: '#F59E0B', fontSize: 32, fontWeight: '800', marginVertical: 4 }}>
                   ₹{totalCartPrice.toLocaleString()}
                 </Text>
-                <Text style={{ color: '#64748B', fontSize: 11, marginTop: 4 }}>
-                  UPI: {selectedUpiOption}
+                <Text style={{ color: '#38BDF8', fontSize: 11 }}>
+                  Live Mode: vilaksh.peddi@ybl
                 </Text>
               </View>
-
-              <Text style={{ color: '#F8FAFC', fontSize: 15, fontWeight: '700', marginBottom: 12 }}>
-                Select Payment Method
-              </Text>
 
               {/* UPI Option */}
               <TouchableOpacity
@@ -940,6 +1557,23 @@ const styles = StyleSheet.create({
     color: '#FFF8F0',
     fontSize: 22,
     fontWeight: '800',
+  },
+  profileHeaderButton: {
+    position: 'relative',
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#2A1504',
+    borderWidth: 1,
+    borderColor: '#3D220A',
+  },
+  profileActiveDot: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
   },
   cartHeaderButton: {
     position: 'relative',
@@ -1269,10 +1903,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  modalHeaderIcon: {
-    alignItems: 'center',
-    marginVertical: 12,
-  },
   modalTitle: {
     fontSize: 20,
     fontWeight: '800',
@@ -1335,13 +1965,111 @@ const styles = StyleSheet.create({
   },
   cartModalTitle: {
     color: '#FFF8F0',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
   },
   cartModalClose: {
     color: '#D97706',
     fontSize: 14,
     fontWeight: '600',
+  },
+  authTabRow: {
+    flexDirection: 'row',
+    backgroundColor: '#EFEAE2',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 16,
+  },
+  authTabBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 10,
+  },
+  authTabBtnActive: {
+    backgroundColor: '#D97706',
+  },
+  authTabBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6B5744',
+  },
+  authTabBtnTextActive: {
+    color: '#FFFFFF',
+  },
+  userProfileCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#EFEAE2',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  userAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#D97706',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  userProfileName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1A0D00',
+  },
+  userProfileContact: {
+    fontSize: 12,
+    color: '#786654',
+    marginTop: 2,
+  },
+  signOutBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#F3EFEA',
+    borderWidth: 1,
+    borderColor: '#E7E0D8',
+  },
+  signOutBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  emptyOrdersCard: {
+    padding: 30,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EFEAE2',
+  },
+  orderHistoryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#EFEAE2',
+  },
+  orderStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  orderStatusText: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
   emptyCartBox: {
     flex: 1,

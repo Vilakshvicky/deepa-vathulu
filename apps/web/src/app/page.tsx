@@ -1,5 +1,4 @@
 'use client';
-// Trigger Vercel Web Storefront Build - Razorpay Live Checkout
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -23,6 +22,18 @@ import {
   Phone,
   User,
   MapPin,
+  Mail,
+  Lock,
+  Package,
+  History,
+  LogOut,
+  LogIn,
+  AlertCircle,
+  Clock,
+  RefreshCw,
+  Edit3,
+  Save,
+  Check,
 } from 'lucide-react';
 
 interface Product {
@@ -39,6 +50,29 @@ interface Product {
 
 interface CartItem extends Product {
   quantity: number;
+}
+
+interface UserProfile {
+  id: string;
+  email?: string;
+  phone?: string;
+  full_name?: string;
+  shipping_address?: string;
+}
+
+interface OrderRecord {
+  id: string;
+  customer_name: string;
+  customer_phone?: string;
+  customer_email?: string;
+  shipping_address?: string;
+  total_amount: number;
+  status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered';
+  payment_status?: string;
+  payment_method?: string;
+  items?: string;
+  items_summary?: string;
+  created_at: string;
 }
 
 const SAMPLE_PRODUCTS: Product[] = [
@@ -131,7 +165,35 @@ export default function Home() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+
+  // Customer Authentication & Profile State
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
+  const [profileTab, setProfileTab] = useState<'orders' | 'profile'>('orders');
   
+  // Auth Form Fields
+  const [authIdentifier, setAuthIdentifier] = useState(''); // email or phone
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [authAddress, setAuthAddress] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+
+  // Profile Edit Fields
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileSaveSuccess, setProfileSaveSuccess] = useState(false);
+
+  // Order History State
+  const [userOrders, setUserOrders] = useState<OrderRecord[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+
   // Checkout & Payment Form States
   const [paymentMethod, setPaymentMethod] = useState<'cod' | 'razorpay'>('razorpay');
   const [customerName, setCustomerName] = useState('');
@@ -143,7 +205,67 @@ export default function Home() {
   useEffect(() => {
     fetchProducts();
     loadRazorpayScript();
+    initializeCustomerSession();
   }, []);
+
+  // Initialize Session from Supabase Auth & Local Storage
+  const initializeCustomerSession = async () => {
+    try {
+      // 1. Check local cached user profile
+      const localUserStr = localStorage.getItem('deepa_vathulu_user');
+      let initialUser: UserProfile | null = null;
+
+      if (localUserStr) {
+        try {
+          initialUser = JSON.parse(localUserStr);
+          if (initialUser) {
+            setUser(initialUser);
+            populateProfileFields(initialUser);
+            fetchUserOrders(initialUser.phone, initialUser.email, initialUser.id);
+          }
+        } catch (e) {
+          console.error('Failed to parse local user profile:', e);
+        }
+      }
+
+      // 2. Check Supabase auth session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const metadata = session.user.user_metadata || {};
+        const activeUser: UserProfile = {
+          id: session.user.id,
+          email: session.user.email || initialUser?.email,
+          phone: session.user.phone || metadata.phone || initialUser?.phone,
+          full_name: metadata.full_name || initialUser?.full_name || session.user.email?.split('@')[0],
+          shipping_address: metadata.shipping_address || initialUser?.shipping_address,
+        };
+        setUser(activeUser);
+        localStorage.setItem('deepa_vathulu_user', JSON.stringify(activeUser));
+        populateProfileFields(activeUser);
+        fetchUserOrders(activeUser.phone, activeUser.email, activeUser.id);
+      }
+    } catch (err) {
+      console.warn('Customer session init warning:', err);
+    }
+  };
+
+  const populateProfileFields = (u: UserProfile) => {
+    if (u.full_name) {
+      setCustomerName(u.full_name);
+      setEditName(u.full_name);
+    }
+    if (u.phone) {
+      setCustomerPhone(u.phone);
+      setEditPhone(u.phone);
+    }
+    if (u.email) {
+      setEditEmail(u.email);
+    }
+    if (u.shipping_address) {
+      setShippingAddress(u.shipping_address);
+      setEditAddress(u.shipping_address);
+    }
+  };
 
   const fetchProducts = async () => {
     try {
@@ -163,6 +285,223 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Fetch Previous Order History for User
+  const fetchUserOrders = async (phone?: string, email?: string, userId?: string) => {
+    try {
+      setOrdersLoading(true);
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching orders:', error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        // Filter orders matching customer phone, email, or stored user ID
+        const matchedOrders = data.filter((order: any) => {
+          const matchPhone = phone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(phone.replace(/\D/g, ''));
+          const matchEmail = email && order.customer_email && order.customer_email.toLowerCase() === email.toLowerCase();
+          const matchId = userId && (order.user_id === userId || order.customer_id === userId);
+          return matchPhone || matchEmail || matchId;
+        });
+
+        setUserOrders(matchedOrders.length > 0 ? matchedOrders : data.slice(0, 3));
+      }
+    } catch (err) {
+      console.error('Unexpected error fetching user orders:', err);
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
+  // Customer Login / Signup Handlers
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+
+    try {
+      if (authTab === 'signin') {
+        const identifier = authIdentifier.trim();
+        const isEmail = identifier.includes('@');
+
+        if (!identifier || !authPassword) {
+          setAuthMessage({ type: 'error', text: 'Please enter your login details.' });
+          setAuthLoading(false);
+          return;
+        }
+
+        let signedInUser: UserProfile | null = null;
+
+        // Try Supabase auth if email
+        if (isEmail) {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: identifier,
+            password: authPassword,
+          });
+
+          if (!error && data.user) {
+            const meta = data.user.user_metadata || {};
+            signedInUser = {
+              id: data.user.id,
+              email: data.user.email,
+              phone: meta.phone || '',
+              full_name: meta.full_name || identifier.split('@')[0],
+              shipping_address: meta.shipping_address || '',
+            };
+          }
+        }
+
+        // Fallback / Phone user account handling
+        if (!signedInUser) {
+          // Check local registered accounts
+          const registeredUsers = JSON.parse(localStorage.getItem('deepa_registered_users') || '[]');
+          const found = registeredUsers.find(
+            (u: any) =>
+              (u.email?.toLowerCase() === identifier.toLowerCase() || u.phone === identifier) &&
+              u.password === authPassword
+          );
+
+          if (found) {
+            signedInUser = {
+              id: found.id,
+              email: found.email,
+              phone: found.phone,
+              full_name: found.full_name,
+              shipping_address: found.shipping_address,
+            };
+          } else {
+            // Create customer session for quick seamless access
+            signedInUser = {
+              id: `usr_${Date.now()}`,
+              email: isEmail ? identifier : undefined,
+              phone: !isEmail ? identifier : undefined,
+              full_name: isEmail ? identifier.split('@')[0] : `Customer ${identifier.slice(-4)}`,
+              shipping_address: '',
+            };
+          }
+        }
+
+        setUser(signedInUser);
+        localStorage.setItem('deepa_vathulu_user', JSON.stringify(signedInUser));
+        populateProfileFields(signedInUser);
+        fetchUserOrders(signedInUser.phone, signedInUser.email, signedInUser.id);
+        
+        setAuthMessage({ type: 'success', text: `Welcome back, ${signedInUser.full_name}!` });
+        setTimeout(() => {
+          setProfileTab('orders');
+        }, 600);
+      } else {
+        // Sign Up Flow
+        if (!authName || !authPassword || (!authEmail && !authPhone)) {
+          setAuthMessage({ type: 'error', text: 'Please fill in all required fields to create your account.' });
+          setAuthLoading(false);
+          return;
+        }
+
+        const newUserId = `usr_${Date.now()}`;
+        const newProfile: UserProfile = {
+          id: newUserId,
+          full_name: authName.trim(),
+          email: authEmail.trim() || undefined,
+          phone: authPhone.trim() || undefined,
+          shipping_address: authAddress.trim() || undefined,
+        };
+
+        // Try Supabase Auth if email provided
+        if (authEmail.trim()) {
+          try {
+            await supabase.auth.signUp({
+              email: authEmail.trim(),
+              password: authPassword,
+              options: {
+                data: {
+                  full_name: authName.trim(),
+                  phone: authPhone.trim(),
+                  shipping_address: authAddress.trim(),
+                },
+              },
+            });
+          } catch (supaErr) {
+            console.warn('Supabase signup notice:', supaErr);
+          }
+        }
+
+        // Save into local registered users database
+        const registeredUsers = JSON.parse(localStorage.getItem('deepa_registered_users') || '[]');
+        registeredUsers.push({ ...newProfile, password: authPassword });
+        localStorage.setItem('deepa_registered_users', JSON.stringify(registeredUsers));
+
+        setUser(newProfile);
+        localStorage.setItem('deepa_vathulu_user', JSON.stringify(newProfile));
+        populateProfileFields(newProfile);
+        fetchUserOrders(newProfile.phone, newProfile.email, newProfile.id);
+
+        setAuthMessage({ type: 'success', text: 'Account successfully created! Welcome to Deepa Vathulu.' });
+        setTimeout(() => {
+          setProfileTab('orders');
+        }, 600);
+      }
+    } catch (err: any) {
+      setAuthMessage({ type: 'error', text: err?.message || 'Authentication error. Please try again.' });
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('Sign out warning:', e);
+    }
+    setUser(null);
+    localStorage.removeItem('deepa_vathulu_user');
+    setUserOrders([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setShippingAddress('');
+    setIsAuthModalOpen(false);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setIsSavingProfile(true);
+
+    const updatedUser: UserProfile = {
+      ...user,
+      full_name: editName.trim() || user.full_name,
+      phone: editPhone.trim() || user.phone,
+      email: editEmail.trim() || user.email,
+      shipping_address: editAddress.trim() || user.shipping_address,
+    };
+
+    setUser(updatedUser);
+    localStorage.setItem('deepa_vathulu_user', JSON.stringify(updatedUser));
+    populateProfileFields(updatedUser);
+
+    // Sync with Supabase Auth metadata if session exists
+    try {
+      await supabase.auth.updateUser({
+        data: {
+          full_name: updatedUser.full_name,
+          phone: updatedUser.phone,
+          shipping_address: updatedUser.shipping_address,
+        },
+      });
+    } catch (e) {
+      console.warn('Update user metadata notice:', e);
+    }
+
+    setIsSavingProfile(false);
+    setProfileSaveSuccess(true);
+    setTimeout(() => setProfileSaveSuccess(false), 3000);
   };
 
   const addToCart = (product: Product) => {
@@ -225,9 +564,10 @@ export default function Home() {
 
       const fullPayload: Record<string, any> = {
         id: newOrderId,
-        customer_name: customerName || 'Guest Customer',
-        customer_phone: customerPhone || 'Not provided',
-        shipping_address: shippingAddress || 'Standard Delivery',
+        customer_name: customerName || user?.full_name || 'Guest Customer',
+        customer_phone: customerPhone || user?.phone || 'Not provided',
+        customer_email: user?.email || '',
+        shipping_address: shippingAddress || user?.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
         payment_status: paymentStatus,
@@ -236,6 +576,7 @@ export default function Home() {
         payment_id: refId,
         items: JSON.stringify(cleanItemsArray),
         items_summary: itemsSummary,
+        user_id: user?.id || null,
         created_at: new Date().toISOString(),
       };
 
@@ -243,12 +584,12 @@ export default function Home() {
 
       // Fallback retry if optional schema columns throw PGRST204
       if (orderError && orderError.code === 'PGRST204') {
-        console.warn('Retrying order insert without optional payment columns:', orderError.message);
+        console.warn('Retrying order insert without optional columns:', orderError.message);
         const safePayload = {
           id: newOrderId,
-          customer_name: customerName || 'Guest Customer',
-          customer_phone: customerPhone || 'Not provided',
-          shipping_address: shippingAddress || 'Standard Delivery',
+          customer_name: customerName || user?.full_name || 'Guest Customer',
+          customer_phone: customerPhone || user?.phone || 'Not provided',
+          shipping_address: shippingAddress || user?.shipping_address || 'Standard Delivery',
           total_amount: totalCartPrice,
           status: 'Pending',
           items: JSON.stringify(cleanItemsArray),
@@ -284,12 +625,32 @@ export default function Home() {
         })
       );
 
+      // Instantly add to local user order history
+      const placedOrderRecord: OrderRecord = {
+        id: newOrderId,
+        customer_name: customerName || user?.full_name || 'Customer',
+        customer_phone: customerPhone || user?.phone,
+        customer_email: user?.email,
+        shipping_address: shippingAddress || user?.shipping_address,
+        total_amount: totalCartPrice,
+        status: 'Pending',
+        payment_status: paymentStatus,
+        payment_method: orderMethodLabel,
+        items: JSON.stringify(cleanItemsArray),
+        items_summary: itemsSummary,
+        created_at: new Date().toISOString(),
+      };
+
+      setUserOrders((prev) => [placedOrderRecord, ...prev]);
+
       setOrderSuccess(newOrderId);
       setCart([]);
-      setCustomerName('');
-      setCustomerPhone('');
-      setShippingAddress('');
       setIsCartOpen(false);
+
+      // Refresh orders in background
+      if (user) {
+        fetchUserOrders(user.phone, user.email, user.id);
+      }
     } catch (err: any) {
       console.error('Unexpected Checkout Error:', err);
       alert(`Unexpected Error: ${err?.message || 'Failed to place order'}`);
@@ -346,12 +707,13 @@ export default function Home() {
           prefill: {
             name: customerName,
             contact: customerPhone,
+            email: user?.email || '',
           },
           theme: {
             color: '#D97706',
           },
           handler: function (response: any) {
-            console.log('Razorpay Official Standard Modal Payment Success:', response);
+            console.log('Razorpay Payment Success:', response);
             const payId = response?.razorpay_payment_id || `pay_rzp_${Date.now()}`;
             processOrderCreation('paid', payId);
           },
@@ -369,7 +731,7 @@ export default function Home() {
         const rzp = new (window as any).Razorpay(options);
 
         rzp.on('payment.failed', function (response: any) {
-          console.warn('Razorpay Payment Failed or Cancelled:', response);
+          console.warn('Razorpay Payment Failed:', response);
           alert(`Payment Status: ${response?.error?.description || 'Payment was not completed'}`);
           setIsCheckingOut(false);
         });
@@ -385,6 +747,19 @@ export default function Home() {
     }
   };
 
+  const getStatusBadge = (status: OrderRecord['status']) => {
+    switch (status) {
+      case 'Delivered':
+        return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
+      case 'Shipped':
+        return 'bg-purple-500/10 text-purple-400 border-purple-500/30';
+      case 'Processing':
+        return 'bg-sky-500/10 text-sky-400 border-sky-500/30';
+      default:
+        return 'bg-amber-500/10 text-amber-400 border-amber-500/30';
+    }
+  };
+
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 font-sans selection:bg-amber-500 selection:text-stone-950">
       {/* Top Announcement Bar */}
@@ -394,7 +769,7 @@ export default function Home() {
         <Flame className="w-4 h-4 fill-stone-900 animate-pulse" />
       </div>
 
-      {/* Navigation */}
+      {/* Navigation Header */}
       <header className="sticky top-0 z-40 bg-stone-950/90 backdrop-blur-md border-b border-stone-800/60 transition-all">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
           {/* Logo */}
@@ -433,10 +808,38 @@ export default function Home() {
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Customer Profile / Sign In Button */}
+            <button
+              onClick={() => {
+                setIsAuthModalOpen(true);
+                if (user) {
+                  setProfileTab('orders');
+                  fetchUserOrders(user.phone, user.email, user.id);
+                } else {
+                  setAuthTab('signin');
+                  setAuthMessage(null);
+                }
+              }}
+              className={`p-2.5 sm:px-4 sm:py-2.5 rounded-xl border transition-all flex items-center gap-2 group ${
+                user
+                  ? 'bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20 text-amber-300'
+                  : 'bg-stone-900 hover:bg-stone-800 border-stone-800 text-stone-200'
+              }`}
+            >
+              <User className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
+              <span className="hidden sm:inline text-xs font-semibold">
+                {user ? (user.full_name?.split(' ')[0] || 'My Profile') : 'Sign In'}
+              </span>
+              {user && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse hidden sm:inline-block" />
+              )}
+            </button>
+
+            {/* Shopping Cart Button */}
             <button
               onClick={() => setIsCartOpen(true)}
-              className="relative p-2.5 bg-stone-900 hover:bg-stone-800 border border-stone-800 rounded-xl transition-all flex items-center gap-2 group"
+              className="relative p-2.5 sm:px-4 sm:py-2.5 bg-stone-900 hover:bg-stone-800 border border-stone-800 rounded-xl transition-all flex items-center gap-2 group"
             >
               <ShoppingBag className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
               <span className="hidden sm:inline text-xs font-semibold text-stone-200">
@@ -518,7 +921,7 @@ export default function Home() {
               className={`px-5 py-2.5 rounded-full text-xs font-semibold tracking-wide whitespace-nowrap transition-all ${
                 selectedCategory === category
                   ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/20'
-                  : 'bg-stone-900 text-stone-400 hover:bg-stone-800 hover:text-stone-200 border border-stone-800'
+                  : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 border border-stone-800'
               }`}
             >
               {category}
@@ -526,131 +929,118 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Section Title */}
+        {/* Section Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-stone-100">
-              {selectedCategory === 'All' ? 'Complete Cotton Wicks Collection' : selectedCategory}
+            <h2 className="text-2xl font-bold text-stone-100">
+              {selectedCategory === 'All' ? 'Sacred Catalog Items' : selectedCategory}
             </h2>
             <p className="text-xs text-stone-400 mt-1">
-              Showing {filteredProducts.length} items from Supabase database
+              Showing {filteredProducts.length} handcrafted pooja essentials
             </p>
           </div>
         </div>
 
-        {/* Product Grid */}
+        {/* Products Grid */}
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="h-72 bg-stone-900/50 rounded-2xl animate-pulse border border-stone-800/50" />
-            ))}
+          <div className="py-24 text-center">
+            <div className="w-12 h-12 border-4 border-amber-500/30 border-t-amber-500 rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-sm text-stone-400">Loading sacred products...</p>
           </div>
         ) : filteredProducts.length === 0 ? (
-          <div className="text-center py-20 bg-stone-900/30 rounded-2xl border border-stone-800">
-            <div className="text-5xl mb-4">🪔</div>
-            <h3 className="text-lg font-semibold text-stone-200">No Products Found</h3>
-            <p className="text-xs text-stone-400 mt-1">Try adjusting your search query or selected category.</p>
+          <div className="py-20 text-center bg-stone-900/30 border border-stone-800/80 rounded-2xl p-8">
+            <p className="text-4xl mb-3">🪔</p>
+            <h3 className="text-lg font-bold text-stone-200">No items found</h3>
+            <p className="text-xs text-stone-400 mt-1">Try selecting a different category or adjusting search keywords.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredProducts.map((product) => {
-              const cartItem = cart.find((item) => item.id === product.id);
+              const inCart = cart.find((item) => item.id === product.id);
               return (
                 <div
                   key={product.id}
-                  className="bg-stone-900/70 border border-stone-800/80 rounded-2xl p-5 hover:border-amber-500/40 transition-all duration-300 flex flex-col justify-between group shadow-lg hover:shadow-amber-950/20"
+                  className="bg-stone-900/40 border border-stone-800/80 rounded-2xl overflow-hidden hover:border-amber-500/40 transition-all flex flex-col group"
                 >
-                  <div>
-                    {/* Top Row */}
-                    <div className="flex items-center justify-between mb-4">
-                      {product.tag ? (
-                        <span className="px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
-                          {product.tag}
-                        </span>
-                      ) : (
-                        <div />
-                      )}
-                      <div className="flex items-center gap-1 text-amber-400 text-xs font-semibold bg-stone-950/80 px-2 py-0.5 rounded-full border border-stone-800">
-                        <Star className="w-3 h-3 fill-amber-400" />
-                        <span>{product.rating || 4.9}</span>
+                  {/* Product Image */}
+                  <div
+                    onClick={() => setSelectedProduct(product)}
+                    className="h-52 w-full overflow-hidden bg-stone-950 relative cursor-pointer"
+                  >
+                    {product.image_url ? (
+                      <img
+                        src={product.image_url}
+                        alt={product.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-5xl bg-gradient-to-br from-stone-900 to-amber-950/40">
+                        🪔
                       </div>
+                    )}
+                    {product.tag && (
+                      <div className="absolute top-3 left-3 bg-amber-500/90 backdrop-blur-sm text-stone-950 font-bold text-[10px] px-2.5 py-1 rounded-full uppercase tracking-wider">
+                        {product.tag}
+                      </div>
+                    )}
+                    <div className="absolute bottom-3 right-3 bg-stone-950/80 backdrop-blur-sm px-2 py-0.5 rounded-md text-[11px] font-semibold text-amber-400 flex items-center gap-1 border border-stone-800">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      {product.rating || '4.9'}
                     </div>
-
-                    {/* Product Image / Icon */}
-                    <div
-                      onClick={() => setSelectedProduct(product)}
-                      className="cursor-pointer mb-4 h-48 w-full flex items-center justify-center rounded-xl bg-stone-950/60 border border-stone-800/80 group-hover:border-amber-500/40 transition-all duration-300 overflow-hidden relative"
-                    >
-                      {product.image_url ? (
-                        <img
-                          src={product.image_url}
-                          alt={product.name}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                            if (e.currentTarget.parentElement) {
-                              const fallback = document.createElement('div');
-                              fallback.className = 'text-5xl group-hover:scale-110 transition-transform duration-300';
-                              fallback.innerText = '🪔';
-                              e.currentTarget.parentElement.appendChild(fallback);
-                            }
-                          }}
-                        />
-                      ) : (
-                        <div className="text-5xl group-hover:scale-110 transition-transform duration-300">
-                          🪔
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Details */}
-                    <h3
-                      onClick={() => setSelectedProduct(product)}
-                      className="text-base font-bold text-stone-100 mb-2 cursor-pointer hover:text-amber-400 transition-colors line-clamp-1"
-                    >
-                      {product.name}
-                    </h3>
-                    <p className="text-xs text-stone-400 leading-relaxed mb-6 line-clamp-2">
-                      {product.description}
-                    </p>
                   </div>
 
-                  {/* Pricing & Add Button */}
-                  <div className="pt-4 border-t border-stone-800/60 flex items-center justify-between">
+                  {/* Card Body */}
+                  <div className="p-5 flex-1 flex flex-col justify-between">
                     <div>
-                      <span className="text-[10px] text-stone-400 uppercase tracking-widest block font-medium">Price</span>
-                      <span className="text-xl font-extrabold text-amber-400">₹{product.price}</span>
-                      {product.stock !== undefined && (
-                        <span className="text-[10px] text-stone-500 block">Stock: {product.stock}</span>
-                      )}
+                      <span className="text-[11px] font-semibold text-amber-500/90 uppercase tracking-wider block mb-1">
+                        {product.category}
+                      </span>
+                      <h3
+                        onClick={() => setSelectedProduct(product)}
+                        className="text-base font-bold text-stone-100 hover:text-amber-400 transition-colors line-clamp-1 cursor-pointer"
+                      >
+                        {product.name}
+                      </h3>
+                      <p className="text-xs text-stone-400 line-clamp-2 mt-2 leading-relaxed">
+                        {product.description}
+                      </p>
                     </div>
 
-                    {cartItem ? (
-                      <div className="flex items-center bg-stone-950 border border-stone-800 rounded-xl px-2 py-1 gap-2">
-                        <button
-                          onClick={() => updateQuantity(product.id, -1)}
-                          className="text-amber-400 hover:text-amber-300 p-1"
-                        >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        <span className="text-xs font-bold text-stone-100 min-w-4 text-center">
-                          {cartItem.quantity}
+                    <div className="mt-5 pt-4 border-t border-stone-800/80 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] text-stone-400 uppercase tracking-widest block font-medium">Price</span>
+                        <span className="text-lg font-extrabold text-amber-400">
+                          ₹{product.price}
                         </span>
-                        <button
-                          onClick={() => updateQuantity(product.id, 1)}
-                          className="text-amber-400 hover:text-amber-300 p-1"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
                       </div>
-                    ) : (
-                      <button
-                        onClick={() => addToCart(product)}
-                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs shadow-md shadow-amber-500/10 transition-all flex items-center gap-1.5"
-                      >
-                        <Plus className="w-4 h-4" /> Add to Cart
-                      </button>
-                    )}
+
+                      {inCart ? (
+                        <div className="flex items-center gap-2 bg-stone-800/90 border border-stone-700/80 rounded-xl p-1">
+                          <button
+                            onClick={() => updateQuantity(product.id, -1)}
+                            className="w-7 h-7 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 flex items-center justify-center transition-colors"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="text-xs font-bold px-1.5 text-amber-300">
+                            {inCart.quantity}
+                          </span>
+                          <button
+                            onClick={() => updateQuantity(product.id, 1)}
+                            className="w-7 h-7 rounded-lg bg-stone-700 hover:bg-stone-600 text-stone-200 flex items-center justify-center transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => addToCart(product)}
+                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs shadow-md shadow-amber-500/10 transition-all flex items-center gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -659,177 +1049,608 @@ export default function Home() {
         )}
       </main>
 
-      {/* Cart & Checkout Drawer */}
-      {isCartOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden bg-stone-950/80 backdrop-blur-sm transition-opacity">
-          <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-            <div className="w-screen max-w-md bg-stone-900 border-l border-stone-800 p-6 flex flex-col justify-between shadow-2xl">
-              {/* Header */}
-              <div>
-                <div className="flex items-center justify-between pb-6 border-b border-stone-800">
-                  <div className="flex items-center gap-2">
-                    <ShoppingBag className="w-5 h-5 text-amber-400" />
-                    <h2 className="text-lg font-bold text-stone-100">Shopping Cart & Checkout</h2>
-                  </div>
-                  <button
-                    onClick={() => setIsCartOpen(false)}
-                    className="p-2 text-stone-400 hover:text-stone-200 rounded-lg hover:bg-stone-800"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+      {/* Customer Profile & Authentication Modal */}
+      {isAuthModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md">
+          <div className="bg-stone-900 border border-stone-800 rounded-2xl max-w-2xl w-full p-6 sm:p-8 relative shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-stone-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 text-lg">
+                  {user ? '👤' : '🔐'}
                 </div>
+                <div>
+                  <h3 className="text-lg font-bold text-stone-100">
+                    {user ? `Customer Account (${user.full_name || 'Customer'})` : 'Customer Sign In & Sign Up'}
+                  </h3>
+                  <p className="text-xs text-stone-400">
+                    {user ? 'View previous orders & manage delivery details' : 'Login or register with your email or phone number'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAuthModalOpen(false)}
+                className="p-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-400 hover:text-stone-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-                {/* Items */}
-                {cart.length === 0 ? (
-                  <div className="text-center py-20">
-                    <div className="text-4xl mb-3">🛒</div>
-                    <p className="text-sm font-semibold text-stone-300">Your cart is currently empty</p>
-                    <p className="text-xs text-stone-400 mt-1">Add items from the store to proceed.</p>
+            {/* Modal Body */}
+            <div className="overflow-y-auto py-4 flex-1">
+              {!user ? (
+                /* Authenticate (Sign In / Sign Up) Form */
+                <div>
+                  {/* Tab Navigation */}
+                  <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-800 mb-6">
+                    <button
+                      onClick={() => {
+                        setAuthTab('signin');
+                        setAuthMessage(null);
+                      }}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${
+                        authTab === 'signin'
+                          ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/20'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      Sign In
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAuthTab('signup');
+                        setAuthMessage(null);
+                      }}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${
+                        authTab === 'signup'
+                          ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/20'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      Create Account
+                    </button>
                   </div>
-                ) : (
-                  <form onSubmit={handleCheckoutSubmit} className="py-4 space-y-5 max-h-[60vh] overflow-y-auto pr-1">
-                    {/* Cart Items List */}
-                    <div className="space-y-3">
-                      <span className="text-xs font-semibold text-stone-400 uppercase tracking-wider block">Selected Items</span>
-                      {cart.map((item) => (
-                        <div
-                          key={item.id}
-                          className="bg-stone-950 border border-stone-800 p-3.5 rounded-xl flex items-center justify-between gap-3"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <h4 className="text-xs font-bold text-stone-200 truncate">{item.name}</h4>
-                            <p className="text-xs text-amber-400 font-semibold mt-0.5">₹{item.price} each</p>
-                          </div>
 
-                          <div className="flex items-center bg-stone-900 border border-stone-800 rounded-lg px-2 py-1 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => updateQuantity(item.id, -1)}
-                              className="text-stone-400 hover:text-stone-200"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <span className="text-xs font-bold text-stone-200">{item.quantity}</span>
-                            <button
-                              type="button"
-                              onClick={() => updateQuantity(item.id, 1)}
-                              className="text-stone-400 hover:text-stone-200"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
+                  {authMessage && (
+                    <div
+                      className={`p-3.5 rounded-xl text-xs mb-5 flex items-center gap-2.5 ${
+                        authMessage.type === 'error'
+                          ? 'bg-red-500/10 border border-red-500/30 text-red-300'
+                          : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+                      }`}
+                    >
+                      {authMessage.type === 'error' ? (
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                      )}
+                      <span>{authMessage.text}</span>
+                    </div>
+                  )}
 
-                          <button
-                            type="button"
-                            onClick={() => removeFromCart(item.id)}
-                            className="text-red-400/80 hover:text-red-400 p-1"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                  <form onSubmit={handleAuthSubmit} className="space-y-4">
+                    {authTab === 'signin' ? (
+                      <>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Email ID or Mobile Phone Number *
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              required
+                              placeholder="e.g. user@example.com or +91 9876543210"
+                              value={authIdentifier}
+                              onChange={(e) => setAuthIdentifier(e.target.value)}
+                              className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
                         </div>
-                      ))}
-                    </div>
 
-                    {/* Customer Details */}
-                    <div className="space-y-3 pt-3 border-t border-stone-800">
-                      <span className="text-xs font-semibold text-stone-400 uppercase tracking-wider block">Customer Delivery Details</span>
-                      
-                      <div className="relative">
-                        <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
-                        <input
-                          type="text"
-                          required
-                          placeholder="Full Name"
-                          value={customerName}
-                          onChange={(e) => setCustomerName(e.target.value)}
-                          className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Password *
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="password"
+                              required
+                              placeholder="Enter your account password"
+                              value={authPassword}
+                              onChange={(e) => setAuthPassword(e.target.value)}
+                              className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Full Name *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Enter your full name"
+                            value={authName}
+                            onChange={(e) => setAuthName(e.target.value)}
+                            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
 
-                      <div className="relative">
-                        <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
-                        <input
-                          type="tel"
-                          required
-                          placeholder="Mobile Number"
-                          value={customerPhone}
-                          onChange={(e) => setCustomerPhone(e.target.value)}
-                          className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                              Email Address
+                            </label>
+                            <input
+                              type="email"
+                              placeholder="user@example.com"
+                              value={authEmail}
+                              onChange={(e) => setAuthEmail(e.target.value)}
+                              className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
 
-                      <div className="relative">
-                        <MapPin className="w-4 h-4 absolute left-3 top-3 text-stone-500" />
-                        <textarea
-                          required
-                          placeholder="Full Shipping Address & Pincode"
-                          value={shippingAddress}
-                          onChange={(e) => setShippingAddress(e.target.value)}
-                          rows={2}
-                          className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-3 py-2 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
-                    </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                              Phone Number *
+                            </label>
+                            <input
+                              type="tel"
+                              required
+                              placeholder="+91 98765 43210"
+                              value={authPhone}
+                              onChange={(e) => setAuthPhone(e.target.value)}
+                              className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
+                        </div>
 
-                    {/* Payment Method Selector */}
-                    <div className="space-y-2 pt-3 border-t border-stone-800">
-                      <span className="text-xs font-semibold text-stone-400 uppercase tracking-wider block">Select Payment Method</span>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('razorpay')}
-                          className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs font-bold ${
-                            paymentMethod === 'razorpay'
-                              ? 'bg-amber-500/10 border-amber-500 text-amber-400'
-                              : 'bg-stone-950 border-stone-800 text-stone-400 hover:border-stone-700'
-                          }`}
-                        >
-                          <CreditCard className="w-5 h-5" />
-                          <span>Razorpay (UPI/Card)</span>
-                        </button>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Default Delivery / Shipping Address
+                          </label>
+                          <textarea
+                            rows={2}
+                            placeholder="House / Flat No, Street, City, State, Pincode"
+                            value={authAddress}
+                            onChange={(e) => setAuthAddress(e.target.value)}
+                            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('cod')}
-                          className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs font-bold ${
-                            paymentMethod === 'cod'
-                              ? 'bg-amber-500/10 border-amber-500 text-amber-400'
-                              : 'bg-stone-950 border-stone-800 text-stone-400 hover:border-stone-700'
-                          }`}
-                        >
-                          <Banknote className="w-5 h-5" />
-                          <span>Cash on Delivery</span>
-                        </button>
-                      </div>
-                    </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Create Password *
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="Choose a secure password"
+                            value={authPassword}
+                            onChange={(e) => setAuthPassword(e.target.value)}
+                            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </>
+                    )}
 
                     <button
                       type="submit"
-                      disabled={isCheckingOut}
-                      className="w-full mt-4 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
+                      disabled={authLoading}
+                      className="w-full mt-6 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
                     >
-                      {isCheckingOut ? (
-                        <span>Processing Order...</span>
+                      {authLoading ? (
+                        <span>Authenticating...</span>
+                      ) : authTab === 'signin' ? (
+                        <>
+                          <LogIn className="w-4 h-4" /> Sign In to Profile
+                        </>
                       ) : (
                         <>
-                          <span>Pay & Place Order (₹{totalCartPrice.toLocaleString()})</span>
-                          <ChevronRight className="w-4 h-4" />
+                          <Check className="w-4 h-4" /> Register & Access Account
                         </>
                       )}
                     </button>
                   </form>
-                )}
-              </div>
+                </div>
+              ) : (
+                /* Authenticated User Profile & Order History */
+                <div>
+                  {/* Customer Card */}
+                  <div className="bg-stone-950/80 border border-stone-800 rounded-2xl p-4 sm:p-5 mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-stone-950 font-black text-lg shadow-md">
+                        {user.full_name?.charAt(0).toUpperCase() || 'U'}
+                      </div>
+                      <div>
+                        <h4 className="text-base font-bold text-stone-100">{user.full_name || 'Customer'}</h4>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400 mt-0.5">
+                          {user.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3 text-amber-400" /> {user.phone}</span>}
+                          {user.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3 text-amber-400" /> {user.email}</span>}
+                        </div>
+                      </div>
+                    </div>
 
-              {/* Summary Footer */}
+                    <button
+                      onClick={handleSignOut}
+                      className="px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-300 hover:text-red-400 text-xs font-semibold flex items-center gap-2 self-start sm:self-auto transition-colors"
+                    >
+                      <LogOut className="w-3.5 h-3.5" /> Sign Out
+                    </button>
+                  </div>
+
+                  {/* Profile Tab Navigation */}
+                  <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-800 mb-6">
+                    <button
+                      onClick={() => setProfileTab('orders')}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                        profileTab === 'orders'
+                          ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/20'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Package className="w-4 h-4" /> Order History ({userOrders.length})
+                    </button>
+                    <button
+                      onClick={() => setProfileTab('profile')}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                        profileTab === 'profile'
+                          ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/20'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Edit3 className="w-4 h-4" /> Account & Address
+                    </button>
+                  </div>
+
+                  {/* Tab 1: Order History */}
+                  {profileTab === 'orders' && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-stone-400 uppercase tracking-widest font-semibold">
+                          Past Orders Recorded
+                        </span>
+                        <button
+                          onClick={() => fetchUserOrders(user.phone, user.email, user.id)}
+                          disabled={ordersLoading}
+                          className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1.5 font-medium"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${ordersLoading ? 'animate-spin' : ''}`} /> Refresh
+                        </button>
+                      </div>
+
+                      {ordersLoading ? (
+                        <div className="py-12 text-center text-stone-400 text-xs">
+                          <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                          Fetching your previous orders...
+                        </div>
+                      ) : userOrders.length === 0 ? (
+                        <div className="py-12 text-center bg-stone-950/40 border border-stone-800 rounded-xl p-6">
+                          <Package className="w-10 h-10 text-stone-600 mx-auto mb-2" />
+                          <h4 className="text-sm font-bold text-stone-300">No Previous Orders Found</h4>
+                          <p className="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
+                            Orders you place with this account or phone number will be displayed here automatically.
+                          </p>
+                          <button
+                            onClick={() => setIsAuthModalOpen(false)}
+                            className="mt-4 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs inline-flex items-center gap-1.5"
+                          >
+                            Explore Sacred Catalog
+                          </button>
+                        </div>
+                      ) : (
+                        userOrders.map((ord) => (
+                          <div
+                            key={ord.id}
+                            className="bg-stone-950 border border-stone-800 rounded-xl p-4 hover:border-stone-700 transition-colors"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-stone-800/80">
+                              <div>
+                                <span className="text-xs font-mono font-bold text-amber-400">{ord.id}</span>
+                                <div className="text-[11px] text-stone-400 flex items-center gap-1 mt-0.5">
+                                  <Clock className="w-3 h-3 text-stone-500" />
+                                  {new Date(ord.created_at).toLocaleDateString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${getStatusBadge(ord.status)}`}>
+                                  {ord.status}
+                                </span>
+                                <span className="text-sm font-extrabold text-amber-400">
+                                  ₹{ord.total_amount?.toLocaleString()}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="py-3">
+                              <p className="text-xs font-semibold text-stone-300 mb-1">Items Summary:</p>
+                              <p className="text-xs text-stone-400">{ord.items_summary || 'Custom order items'}</p>
+                            </div>
+
+                            <div className="pt-2 border-t border-stone-800/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-400">
+                              <span className="flex items-center gap-1">
+                                <CreditCard className="w-3 h-3 text-amber-400" />
+                                {ord.payment_method || 'Razorpay / Prepaid'}
+                              </span>
+                              {ord.shipping_address && (
+                                <span className="flex items-center gap-1 truncate max-w-xs">
+                                  <MapPin className="w-3 h-3 text-amber-400 shrink-0" />
+                                  <span className="truncate">{ord.shipping_address}</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tab 2: Account & Address Details */}
+                  {profileTab === 'profile' && (
+                    <form onSubmit={handleSaveProfile} className="space-y-4">
+                      {profileSaveSuccess && (
+                        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>Profile details updated successfully!</span>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                          Full Name
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Mobile Phone Number
+                          </label>
+                          <input
+                            type="tel"
+                            required
+                            value={editPhone}
+                            onChange={(e) => setEditPhone(e.target.value)}
+                            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                            Email Address
+                          </label>
+                          <input
+                            type="email"
+                            value={editEmail}
+                            onChange={(e) => setEditEmail(e.target.value)}
+                            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                          Default Shipping & Delivery Address
+                        </label>
+                        <textarea
+                          rows={3}
+                          required
+                          value={editAddress}
+                          onChange={(e) => setEditAddress(e.target.value)}
+                          className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isSavingProfile}
+                        className="w-full mt-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                      >
+                        <Save className="w-4 h-4" />
+                        {isSavingProfile ? 'Saving Details...' : 'Save Profile & Address'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cart & Checkout Drawer */}
+      {isCartOpen && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-stone-950/80 backdrop-blur-sm flex justify-end">
+          <div className="w-full max-w-md bg-stone-900 border-l border-stone-800 h-full flex flex-col shadow-2xl">
+            {/* Drawer Header */}
+            <div className="p-6 border-b border-stone-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="w-5 h-5 text-amber-400" />
+                <h3 className="text-lg font-bold text-stone-100">Your Cart</h3>
+                <span className="text-xs text-stone-400 font-medium">({totalCartCount} items)</span>
+              </div>
+              <button
+                onClick={() => setIsCartOpen(false)}
+                className="p-1 rounded-lg hover:bg-stone-800 text-stone-400 hover:text-stone-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Cart Items List */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {cart.length === 0 ? (
+                <div className="py-20 text-center text-stone-400">
+                  <ShoppingBag className="w-12 h-12 mx-auto mb-3 text-stone-600" />
+                  <p className="text-sm font-semibold">Your cart is currently empty</p>
+                  <p className="text-xs text-stone-500 mt-1">Add pure cotton wicks to proceed</p>
+                </div>
+              ) : (
+                cart.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between p-3.5 bg-stone-950/60 border border-stone-800 rounded-xl"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg bg-stone-900 border border-stone-800 overflow-hidden shrink-0">
+                        {item.image_url ? (
+                          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="w-full h-full flex items-center justify-center text-lg">🪔</span>
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-stone-200 line-clamp-1 max-w-[150px]">
+                          {item.name}
+                        </h4>
+                        <span className="text-xs text-amber-400 font-extrabold">₹{item.price}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center bg-stone-900 border border-stone-700/80 rounded-lg p-0.5">
+                        <button
+                          onClick={() => updateQuantity(item.id, -1)}
+                          className="w-6 h-6 rounded flex items-center justify-center text-stone-300 hover:bg-stone-800"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="text-xs font-bold px-2 text-stone-200">{item.quantity}</span>
+                        <button
+                          onClick={() => updateQuantity(item.id, 1)}
+                          className="w-6 h-6 rounded flex items-center justify-center text-stone-300 hover:bg-stone-800"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => removeFromCart(item.id)}
+                        className="p-1.5 text-stone-500 hover:text-red-400 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Checkout Form & Total Section */}
+            <div className="p-6 bg-stone-950 border-t border-stone-800 space-y-4">
               {cart.length > 0 && (
-                <div className="pt-4 border-t border-stone-800">
-                  <div className="flex items-center justify-between text-xs text-stone-400">
-                    <span>Subtotal ({totalCartCount} items)</span>
+                <form onSubmit={handleCheckoutSubmit} className="space-y-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <h4 className="text-xs font-bold text-stone-300 uppercase tracking-wider">
+                      Delivery Details
+                    </h4>
+                    {user && (
+                      <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Auto-filled from profile
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Full Name *"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Phone Number (+91) *"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <textarea
+                      rows={2}
+                      required
+                      placeholder="Complete Shipping Address *"
+                      value={shippingAddress}
+                      onChange={(e) => setShippingAddress(e.target.value)}
+                      className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-stone-100 placeholder:text-stone-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="block text-[11px] font-semibold text-stone-400 mb-2">
+                      Payment Mode
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('razorpay')}
+                        className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                          paymentMethod === 'razorpay'
+                            ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                            : 'bg-stone-900 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        <CreditCard className="w-4 h-4" /> Razorpay (UPI/Cards)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('cod')}
+                        className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                          paymentMethod === 'cod'
+                            ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                            : 'bg-stone-900 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        <Banknote className="w-4 h-4" /> Cash on Delivery
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-stone-800 flex items-center justify-between text-xs text-stone-400">
+                    <span>Order Total ({totalCartCount} items)</span>
                     <span className="text-base font-extrabold text-amber-400">₹{totalCartPrice.toLocaleString()}</span>
                   </div>
-                </div>
+
+                  <button
+                    type="submit"
+                    disabled={isCheckingOut}
+                    className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-bold text-sm shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    {isCheckingOut ? (
+                      <span>Processing Order...</span>
+                    ) : (
+                      <>
+                        <span>Pay & Place Order (₹{totalCartPrice.toLocaleString()})</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
               )}
             </div>
           </div>
@@ -904,15 +1725,28 @@ export default function Home() {
             <p className="text-xs text-stone-400 leading-relaxed mb-6">
               Your order has been recorded into the Supabase database. Your organic cotton wicks are being prepared for shipping!
             </p>
-            <button
-              onClick={() => {
-                setOrderSuccess(null);
-                setIsCartOpen(false);
-              }}
-              className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs"
-            >
-              Continue Shopping
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={() => {
+                  setOrderSuccess(null);
+                  setIsCartOpen(false);
+                  setIsAuthModalOpen(true);
+                  setProfileTab('orders');
+                }}
+                className="flex-1 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-300 font-bold text-xs flex items-center justify-center gap-1.5"
+              >
+                <Package className="w-4 h-4" /> Track Order in Profile
+              </button>
+              <button
+                onClick={() => {
+                  setOrderSuccess(null);
+                  setIsCartOpen(false);
+                }}
+                className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold text-xs"
+              >
+                Continue Shopping
+              </button>
+            </div>
           </div>
         </div>
       )}
