@@ -137,7 +137,7 @@ export default function AdminDashboard() {
       if (ordersError) {
         console.error('Admin Orders fetch error:', ordersError);
       } else if (dbOrders && dbOrders.length > 0) {
-        setOrders(dbOrders);
+        setOrders(dbOrders.filter((o: any) => o.status !== 'Profile'));
       }
     } catch (err) {
       console.error('Unexpected Admin fetch error:', err);

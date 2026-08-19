@@ -64,10 +64,9 @@ interface OrderRecord {
   id: string;
   customer_name: string;
   customer_phone?: string;
-  customer_email?: string;
   shipping_address?: string;
   total_amount: number;
-  status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered';
+  status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered' | 'Profile';
   payment_status?: string;
   payment_method?: string;
   items?: string;
@@ -208,41 +207,17 @@ export default function Home() {
     initializeCustomerSession();
   }, []);
 
-  // Initialize Session from Supabase Auth & Local Storage
+  // Initialize Session
   const initializeCustomerSession = async () => {
     try {
-      // 1. Check local cached user profile
       const localUserStr = localStorage.getItem('deepa_vathulu_user');
-      let initialUser: UserProfile | null = null;
-
       if (localUserStr) {
-        try {
-          initialUser = JSON.parse(localUserStr);
-          if (initialUser) {
-            setUser(initialUser);
-            populateProfileFields(initialUser);
-            fetchUserOrders(initialUser.phone, initialUser.email, initialUser.id);
-          }
-        } catch (e) {
-          console.error('Failed to parse local user profile:', e);
+        const initialUser: UserProfile = JSON.parse(localUserStr);
+        if (initialUser) {
+          setUser(initialUser);
+          populateProfileFields(initialUser);
+          fetchUserOrders(initialUser.phone, initialUser.email);
         }
-      }
-
-      // 2. Check Supabase auth session
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        const metadata = session.user.user_metadata || {};
-        const activeUser: UserProfile = {
-          id: session.user.id,
-          email: session.user.email || initialUser?.email,
-          phone: session.user.phone || metadata.phone || initialUser?.phone,
-          full_name: metadata.full_name || initialUser?.full_name || session.user.email?.split('@')[0],
-          shipping_address: metadata.shipping_address || initialUser?.shipping_address,
-        };
-        setUser(activeUser);
-        localStorage.setItem('deepa_vathulu_user', JSON.stringify(activeUser));
-        populateProfileFields(activeUser);
-        fetchUserOrders(activeUser.phone, activeUser.email, activeUser.id);
       }
     } catch (err) {
       console.warn('Customer session init warning:', err);
@@ -271,24 +246,20 @@ export default function Home() {
     try {
       setLoading(true);
       const { data, error } = await supabase.from('products').select('*');
-      if (error) {
-        console.error('Error fetching products from Supabase:', error);
-        setProducts(SAMPLE_PRODUCTS);
-      } else if (!data || data.length === 0) {
+      if (error || !data || data.length === 0) {
         setProducts(SAMPLE_PRODUCTS);
       } else {
         setProducts(data);
       }
     } catch (err) {
-      console.error('Unexpected error fetching products:', err);
       setProducts(SAMPLE_PRODUCTS);
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch Previous Order History for User
-  const fetchUserOrders = async (phone?: string, email?: string, userId?: string) => {
+  // Fetch Previous Order History for User from Supabase
+  const fetchUserOrders = async (phone?: string, email?: string) => {
     try {
       setOrdersLoading(true);
       const { data, error } = await supabase
@@ -296,26 +267,65 @@ export default function Home() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching orders:', error);
-        return;
-      }
+      if (error || !data) return;
 
-      if (data && data.length > 0) {
-        // Filter orders matching customer phone, email, or stored user ID
-        const matchedOrders = data.filter((order: any) => {
-          const matchPhone = phone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(phone.replace(/\D/g, ''));
-          const matchEmail = email && order.customer_email && order.customer_email.toLowerCase() === email.toLowerCase();
-          const matchId = userId && (order.user_id === userId || order.customer_id === userId);
-          return matchPhone || matchEmail || matchId;
-        });
+      const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+      const cleanEmail = email ? email.toLowerCase().trim() : '';
 
-        setUserOrders(matchedOrders.length > 0 ? matchedOrders : data.slice(0, 3));
-      }
+      const matchedOrders = data.filter((order: any) => {
+        if (order.status === 'Profile') return false; // Ignore profile records
+        let meta: any = {};
+        try { meta = JSON.parse(order.items || '{}'); } catch (e) {}
+        
+        const matchPhone = cleanPhone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+        const matchEmail = cleanEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
+        return matchPhone || matchEmail;
+      });
+
+      setUserOrders(matchedOrders);
     } catch (err) {
-      console.error('Unexpected error fetching user orders:', err);
+      console.error('Error fetching user orders:', err);
     } finally {
       setOrdersLoading(false);
+    }
+  };
+
+  // Save profile to Supabase so mobile and web stay in sync
+  const saveProfileToSupabase = async (profile: {
+    full_name: string;
+    phone?: string;
+    email?: string;
+    shipping_address?: string;
+    password?: string;
+  }) => {
+    const cleanPhone = (profile.phone || '').replace(/\D/g, '');
+    const cleanEmail = (profile.email || '').toLowerCase().trim();
+    const profileKey = cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_');
+    if (!profileKey) return;
+
+    const record = {
+      id: `USER_PROFILE_${profileKey}`,
+      customer_name: profile.full_name,
+      customer_phone: profile.phone || '',
+      shipping_address: profile.shipping_address || '',
+      items: JSON.stringify({
+        email: profile.email || '',
+        password: profile.password || '',
+        full_name: profile.full_name,
+        phone: profile.phone || '',
+        address: profile.shipping_address || '',
+      }),
+      items_summary: 'Customer Account Profile',
+      total_amount: 0,
+      status: 'Profile',
+      payment_method: 'Customer Profile',
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      await supabase.from('orders').upsert(record, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Supabase profile save notice:', e);
     }
   };
 
@@ -328,6 +338,8 @@ export default function Home() {
     try {
       if (authTab === 'signin') {
         const identifier = authIdentifier.trim();
+        const cleanPhone = identifier.replace(/\D/g, '');
+        const cleanEmail = identifier.toLowerCase().trim();
         const isEmail = identifier.includes('@');
 
         if (!identifier || !authPassword) {
@@ -338,64 +350,95 @@ export default function Home() {
 
         let signedInUser: UserProfile | null = null;
 
-        // Try Supabase auth if email
-        if (isEmail) {
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email: identifier,
-            password: authPassword,
-          });
+        // 1. Fetch from Supabase profile record
+        const profileKey = isEmail ? cleanEmail.replace(/[^a-z0-9]/g, '_') : cleanPhone;
+        const { data: directProfile } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('id', `USER_PROFILE_${profileKey}`)
+          .maybeSingle();
 
-          if (!error && data.user) {
-            const meta = data.user.user_metadata || {};
-            signedInUser = {
-              id: data.user.id,
-              email: data.user.email,
-              phone: meta.phone || '',
-              full_name: meta.full_name || identifier.split('@')[0],
-              shipping_address: meta.shipping_address || '',
-            };
+        if (directProfile) {
+          let meta: any = {};
+          try { meta = JSON.parse(directProfile.items || '{}'); } catch (e) {}
+          if (meta.password && meta.password !== authPassword) {
+            setAuthMessage({ type: 'error', text: 'Incorrect password. Please try again.' });
+            setAuthLoading(false);
+            return;
+          }
+
+          signedInUser = {
+            id: directProfile.id,
+            full_name: directProfile.customer_name || meta.full_name || 'Customer',
+            phone: directProfile.customer_phone || meta.phone || (isEmail ? '' : identifier),
+            email: meta.email || (isEmail ? identifier : ''),
+            shipping_address: directProfile.shipping_address || meta.address || '',
+          };
+        }
+
+        // 2. If not found, check matching past orders in Supabase
+        if (!signedInUser) {
+          const { data: allOrders } = await supabase
+            .from('orders')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (allOrders) {
+            const matched = allOrders.find((r: any) => {
+              let meta: any = {};
+              try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
+              const phoneMatch = cleanPhone && r.customer_phone && r.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+              const emailMatch = isEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
+              return phoneMatch || emailMatch;
+            });
+
+            if (matched) {
+              let meta: any = {};
+              try { meta = JSON.parse(matched.items || '{}'); } catch (e) {}
+              if (meta.password && meta.password !== authPassword) {
+                setAuthMessage({ type: 'error', text: 'Incorrect password. Please try again.' });
+                setAuthLoading(false);
+                return;
+              }
+
+              signedInUser = {
+                id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+                full_name: matched.customer_name || meta.full_name || 'Customer',
+                phone: matched.customer_phone || (isEmail ? '' : identifier),
+                email: meta.email || (isEmail ? identifier : ''),
+                shipping_address: matched.shipping_address || meta.address || '',
+              };
+            }
           }
         }
 
-        // Fallback / Phone user account handling
+        // 3. Fallback seamless user session
         if (!signedInUser) {
-          // Check local registered accounts
-          const registeredUsers = JSON.parse(localStorage.getItem('deepa_registered_users') || '[]');
-          const found = registeredUsers.find(
-            (u: any) =>
-              (u.email?.toLowerCase() === identifier.toLowerCase() || u.phone === identifier) &&
-              u.password === authPassword
-          );
-
-          if (found) {
-            signedInUser = {
-              id: found.id,
-              email: found.email,
-              phone: found.phone,
-              full_name: found.full_name,
-              shipping_address: found.shipping_address,
-            };
-          } else {
-            // Create customer session for quick seamless access
-            signedInUser = {
-              id: `usr_${Date.now()}`,
-              email: isEmail ? identifier : undefined,
-              phone: !isEmail ? identifier : undefined,
-              full_name: isEmail ? identifier.split('@')[0] : `Customer ${identifier.slice(-4)}`,
-              shipping_address: '',
-            };
-          }
+          signedInUser = {
+            id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+            full_name: isEmail ? identifier.split('@')[0] : `Customer ${cleanPhone.slice(-4)}`,
+            phone: !isEmail ? identifier : '',
+            email: isEmail ? identifier : '',
+            shipping_address: '',
+          };
+          // Save to Supabase
+          await saveProfileToSupabase({
+            full_name: signedInUser.full_name || 'Customer',
+            phone: signedInUser.phone,
+            email: signedInUser.email,
+            password: authPassword,
+          });
         }
 
         setUser(signedInUser);
         localStorage.setItem('deepa_vathulu_user', JSON.stringify(signedInUser));
         populateProfileFields(signedInUser);
-        fetchUserOrders(signedInUser.phone, signedInUser.email, signedInUser.id);
+        fetchUserOrders(signedInUser.phone, signedInUser.email);
         
         setAuthMessage({ type: 'success', text: `Welcome back, ${signedInUser.full_name}!` });
         setTimeout(() => {
           setProfileTab('orders');
-        }, 600);
+        }, 500);
       } else {
         // Sign Up Flow
         if (!authName || !authPassword || (!authEmail && !authPhone)) {
@@ -404,7 +447,10 @@ export default function Home() {
           return;
         }
 
-        const newUserId = `usr_${Date.now()}`;
+        const cleanPhone = authPhone.replace(/\D/g, '');
+        const cleanEmail = authEmail.toLowerCase().trim();
+        const newUserId = `USER_PROFILE_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+        
         const newProfile: UserProfile = {
           id: newUserId,
           full_name: authName.trim(),
@@ -413,39 +459,24 @@ export default function Home() {
           shipping_address: authAddress.trim() || undefined,
         };
 
-        // Try Supabase Auth if email provided
-        if (authEmail.trim()) {
-          try {
-            await supabase.auth.signUp({
-              email: authEmail.trim(),
-              password: authPassword,
-              options: {
-                data: {
-                  full_name: authName.trim(),
-                  phone: authPhone.trim(),
-                  shipping_address: authAddress.trim(),
-                },
-              },
-            });
-          } catch (supaErr) {
-            console.warn('Supabase signup notice:', supaErr);
-          }
-        }
-
-        // Save into local registered users database
-        const registeredUsers = JSON.parse(localStorage.getItem('deepa_registered_users') || '[]');
-        registeredUsers.push({ ...newProfile, password: authPassword });
-        localStorage.setItem('deepa_registered_users', JSON.stringify(registeredUsers));
+        // Save to Supabase so Mobile App can instantly log in with this account
+        await saveProfileToSupabase({
+          full_name: newProfile.full_name || 'Customer',
+          phone: newProfile.phone,
+          email: newProfile.email,
+          shipping_address: newProfile.shipping_address,
+          password: authPassword,
+        });
 
         setUser(newProfile);
         localStorage.setItem('deepa_vathulu_user', JSON.stringify(newProfile));
         populateProfileFields(newProfile);
-        fetchUserOrders(newProfile.phone, newProfile.email, newProfile.id);
+        fetchUserOrders(newProfile.phone, newProfile.email);
 
-        setAuthMessage({ type: 'success', text: 'Account successfully created! Welcome to Deepa Vathulu.' });
+        setAuthMessage({ type: 'success', text: 'Account successfully created and synced with mobile app!' });
         setTimeout(() => {
           setProfileTab('orders');
-        }, 600);
+        }, 500);
       }
     } catch (err: any) {
       setAuthMessage({ type: 'error', text: err?.message || 'Authentication error. Please try again.' });
@@ -454,12 +485,7 @@ export default function Home() {
     }
   };
 
-  const handleSignOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (e) {
-      console.warn('Sign out warning:', e);
-    }
+  const handleSignOut = () => {
     setUser(null);
     localStorage.removeItem('deepa_vathulu_user');
     setUserOrders([]);
@@ -486,18 +512,13 @@ export default function Home() {
     localStorage.setItem('deepa_vathulu_user', JSON.stringify(updatedUser));
     populateProfileFields(updatedUser);
 
-    // Sync with Supabase Auth metadata if session exists
-    try {
-      await supabase.auth.updateUser({
-        data: {
-          full_name: updatedUser.full_name,
-          phone: updatedUser.phone,
-          shipping_address: updatedUser.shipping_address,
-        },
-      });
-    } catch (e) {
-      console.warn('Update user metadata notice:', e);
-    }
+    // Sync to Supabase
+    await saveProfileToSupabase({
+      full_name: updatedUser.full_name || 'Customer',
+      phone: updatedUser.phone,
+      email: updatedUser.email,
+      shipping_address: updatedUser.shipping_address,
+    });
 
     setIsSavingProfile(false);
     setProfileSaveSuccess(true);
@@ -562,44 +583,20 @@ export default function Home() {
       const refId = paymentRef || `pay_rzp_${Date.now()}`;
       const orderMethodLabel = paymentMethod === 'razorpay' ? 'razorpay' : 'Cash on Delivery';
 
-      const fullPayload: Record<string, any> = {
+      const fullPayload = {
         id: newOrderId,
         customer_name: customerName || user?.full_name || 'Guest Customer',
         customer_phone: customerPhone || user?.phone || 'Not provided',
-        customer_email: user?.email || '',
         shipping_address: shippingAddress || user?.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
-        payment_status: paymentStatus,
         payment_method: orderMethodLabel,
-        payment_reference: refId,
-        payment_id: refId,
         items: JSON.stringify(cleanItemsArray),
         items_summary: itemsSummary,
-        user_id: user?.id || null,
         created_at: new Date().toISOString(),
       };
 
-      let { error: orderError } = await supabase.from('orders').insert(fullPayload);
-
-      // Fallback retry if optional schema columns throw PGRST204
-      if (orderError && orderError.code === 'PGRST204') {
-        console.warn('Retrying order insert without optional columns:', orderError.message);
-        const safePayload = {
-          id: newOrderId,
-          customer_name: customerName || user?.full_name || 'Guest Customer',
-          customer_phone: customerPhone || user?.phone || 'Not provided',
-          shipping_address: shippingAddress || user?.shipping_address || 'Standard Delivery',
-          total_amount: totalCartPrice,
-          status: 'Pending',
-          items: JSON.stringify(cleanItemsArray),
-          items_summary: itemsSummary,
-          payment_method: paymentMethod === 'razorpay' ? `razorpay (${refId})` : 'Cash on Delivery',
-          created_at: new Date().toISOString(),
-        };
-        const retryRes = await supabase.from('orders').insert(safePayload);
-        orderError = retryRes.error;
-      }
+      const { error: orderError } = await supabase.from('orders').insert(fullPayload);
 
       if (orderError) {
         console.error('Supabase Order Insert Error:', orderError);
@@ -630,7 +627,6 @@ export default function Home() {
         id: newOrderId,
         customer_name: customerName || user?.full_name || 'Customer',
         customer_phone: customerPhone || user?.phone,
-        customer_email: user?.email,
         shipping_address: shippingAddress || user?.shipping_address,
         total_amount: totalCartPrice,
         status: 'Pending',
@@ -647,9 +643,8 @@ export default function Home() {
       setCart([]);
       setIsCartOpen(false);
 
-      // Refresh orders in background
       if (user) {
-        fetchUserOrders(user.phone, user.email, user.id);
+        fetchUserOrders(user.phone, user.email);
       }
     } catch (err: any) {
       console.error('Unexpected Checkout Error:', err);
@@ -713,7 +708,6 @@ export default function Home() {
             color: '#D97706',
           },
           handler: function (response: any) {
-            console.log('Razorpay Payment Success:', response);
             const payId = response?.razorpay_payment_id || `pay_rzp_${Date.now()}`;
             processOrderCreation('paid', payId);
           },
@@ -738,7 +732,7 @@ export default function Home() {
 
         rzp.open();
       } catch (err: any) {
-        console.error('Error launching official Razorpay modal:', err);
+        console.error('Error launching Razorpay modal:', err);
         alert(`Razorpay Error: ${err?.message || 'Failed to open Razorpay payment modal'}`);
         setIsCheckingOut(false);
       }
@@ -815,7 +809,7 @@ export default function Home() {
                 setIsAuthModalOpen(true);
                 if (user) {
                   setProfileTab('orders');
-                  fetchUserOrders(user.phone, user.email, user.id);
+                  fetchUserOrders(user.phone, user.email);
                 } else {
                   setAuthTab('signin');
                   setAuthMessage(null);
@@ -1139,7 +1133,7 @@ export default function Home() {
                             <input
                               type="text"
                               required
-                              placeholder="e.g. user@example.com or +91 9876543210"
+                              placeholder="e.g. 8074630135 or user@gmail.com"
                               value={authIdentifier}
                               onChange={(e) => setAuthIdentifier(e.target.value)}
                               className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
@@ -1182,27 +1176,27 @@ export default function Home() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
-                              Email Address
+                              Phone Number *
                             </label>
                             <input
-                              type="email"
-                              placeholder="user@example.com"
-                              value={authEmail}
-                              onChange={(e) => setAuthEmail(e.target.value)}
+                              type="tel"
+                              required
+                              placeholder="10-digit phone number"
+                              value={authPhone}
+                              onChange={(e) => setAuthPhone(e.target.value)}
                               className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
                             />
                           </div>
 
                           <div>
                             <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
-                              Phone Number *
+                              Email Address (Optional)
                             </label>
                             <input
-                              type="tel"
-                              required
-                              placeholder="+91 98765 43210"
-                              value={authPhone}
-                              onChange={(e) => setAuthPhone(e.target.value)}
+                              type="email"
+                              placeholder="user@example.com"
+                              value={authEmail}
+                              onChange={(e) => setAuthEmail(e.target.value)}
                               className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
                             />
                           </div>
@@ -1228,7 +1222,7 @@ export default function Home() {
                           <input
                             type="password"
                             required
-                            placeholder="Choose a secure password"
+                            placeholder="Choose a password"
                             value={authPassword}
                             onChange={(e) => setAuthPassword(e.target.value)}
                             className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder:text-stone-600 focus:outline-none focus:border-amber-500"
@@ -1311,10 +1305,10 @@ export default function Home() {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-stone-400 uppercase tracking-widest font-semibold">
-                          Past Orders Recorded
+                          Past Orders Recorded ({userOrders.length})
                         </span>
                         <button
-                          onClick={() => fetchUserOrders(user.phone, user.email, user.id)}
+                          onClick={() => fetchUserOrders(user.phone, user.email)}
                           disabled={ordersLoading}
                           className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1.5 font-medium"
                         >
@@ -1325,14 +1319,14 @@ export default function Home() {
                       {ordersLoading ? (
                         <div className="py-12 text-center text-stone-400 text-xs">
                           <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                          Fetching your previous orders...
+                          Fetching your previous orders from Supabase...
                         </div>
                       ) : userOrders.length === 0 ? (
                         <div className="py-12 text-center bg-stone-950/40 border border-stone-800 rounded-xl p-6">
                           <Package className="w-10 h-10 text-stone-600 mx-auto mb-2" />
                           <h4 className="text-sm font-bold text-stone-300">No Previous Orders Found</h4>
                           <p className="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
-                            Orders you place with this account or phone number will be displayed here automatically.
+                            Orders you place will appear here with live delivery status.
                           </p>
                           <button
                             onClick={() => setIsAuthModalOpen(false)}
@@ -1401,7 +1395,7 @@ export default function Home() {
                       {profileSaveSuccess && (
                         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>Profile details updated successfully!</span>
+                          <span>Profile details updated successfully across web and mobile!</span>
                         </div>
                       )}
 
@@ -1530,7 +1524,7 @@ export default function Home() {
                           onClick={() => updateQuantity(item.id, -1)}
                           className="w-6 h-6 rounded flex items-center justify-center text-stone-300 hover:bg-stone-800"
                         >
-                          <Minus className="w-3 h-3" />
+                          <Minus className="w-3.5 h-3.5" />
                         </button>
                         <span className="text-xs font-bold px-2 text-stone-200">{item.quantity}</span>
                         <button

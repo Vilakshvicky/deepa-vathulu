@@ -148,30 +148,7 @@ export default function App() {
 
   useEffect(() => {
     fetchProducts();
-    initializeMobileUserSession();
   }, []);
-
-  // Initialize Session & Auto-Login from local storage
-  const initializeMobileUserSession = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        const metadata = session.user.user_metadata || {};
-        const profile = {
-          id: session.user.id,
-          email: session.user.email,
-          phone: session.user.phone || metadata.phone || '',
-          full_name: metadata.full_name || session.user.email?.split('@')[0] || 'Customer',
-          shipping_address: metadata.shipping_address || '',
-        };
-        setCurrentUser(profile);
-        populateProfileFields(profile);
-        fetchUserOrders(profile.phone, profile.email, profile.id);
-      }
-    } catch (e) {
-      console.warn('Mobile session init notice:', e);
-    }
-  };
 
   const populateProfileFields = (user) => {
     if (user.full_name) {
@@ -195,24 +172,20 @@ export default function App() {
     try {
       setLoading(true);
       const { data, error } = await supabase.from('products').select('*');
-      if (error) {
-        console.error('Mobile Supabase Products fetch error:', error);
-        setProducts(SAMPLE_PRODUCTS);
-      } else if (!data || data.length === 0) {
+      if (error || !data || data.length === 0) {
         setProducts(SAMPLE_PRODUCTS);
       } else {
         setProducts(data);
       }
     } catch (err) {
-      console.error('Unexpected Mobile Products fetch error:', err);
       setProducts(SAMPLE_PRODUCTS);
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch Previous Order History
-  const fetchUserOrders = async (phone, email, userId) => {
+  // Fetch Previous Order History from Supabase
+  const fetchUserOrders = async (phone, email) => {
     try {
       setLoadingOrders(true);
       const { data, error } = await supabase
@@ -220,21 +193,22 @@ export default function App() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.warn('Error fetching mobile user orders:', error);
-        return;
-      }
+      if (error || !data) return;
 
-      if (data && data.length > 0) {
-        const matched = data.filter((order) => {
-          const matchPhone = phone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(phone.replace(/\D/g, ''));
-          const matchEmail = email && order.customer_email && order.customer_email.toLowerCase() === email.toLowerCase();
-          const matchId = userId && (order.user_id === userId || order.customer_id === userId);
-          return matchPhone || matchEmail || matchId;
-        });
+      const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+      const cleanEmail = email ? email.toLowerCase().trim() : '';
 
-        setUserOrders(matched.length > 0 ? matched : data.slice(0, 4));
-      }
+      const matched = data.filter((order) => {
+        if (order.status === 'Profile') return false; // Ignore profile rows
+        let meta = {};
+        try { meta = JSON.parse(order.items || '{}'); } catch (e) {}
+        
+        const matchPhone = cleanPhone && order.customer_phone && order.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+        const matchEmail = cleanEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
+        return matchPhone || matchEmail;
+      });
+
+      setUserOrders(matched);
     } catch (err) {
       console.warn('Unexpected error in fetchUserOrders:', err);
     } finally {
@@ -242,50 +216,138 @@ export default function App() {
     }
   };
 
+  // Save profile to Supabase database so website and mobile stay in sync
+  const saveProfileToSupabase = async (profile) => {
+    const cleanPhone = (profile.phone || '').replace(/\D/g, '');
+    const cleanEmail = (profile.email || '').toLowerCase().trim();
+    const profileKey = cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_');
+    if (!profileKey) return;
+
+    const record = {
+      id: `USER_PROFILE_${profileKey}`,
+      customer_name: profile.full_name,
+      customer_phone: profile.phone || '',
+      shipping_address: profile.shipping_address || '',
+      items: JSON.stringify({
+        email: profile.email || '',
+        password: profile.password || '',
+        full_name: profile.full_name,
+        phone: profile.phone || '',
+        address: profile.shipping_address || '',
+      }),
+      items_summary: 'Customer Account Profile',
+      total_amount: 0,
+      status: 'Profile',
+      payment_method: 'Customer Profile',
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      await supabase.from('orders').upsert(record, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Mobile Supabase profile save notice:', e);
+    }
+  };
+
   // Mobile Auth: Sign In
   const handleMobileSignIn = async () => {
     const identifier = authIdentifier.trim();
+    const cleanPhone = identifier.replace(/\D/g, '');
+    const cleanEmail = identifier.toLowerCase().trim();
+    const isEmail = identifier.includes('@');
+
     if (!identifier || !authPassword) {
       Alert.alert('Required Fields', 'Please enter your Email/Phone and Password.');
       return;
     }
 
     setAuthLoading(true);
-    const isEmail = identifier.includes('@');
 
     try {
       let signedIn = null;
-      if (isEmail) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: identifier,
-          password: authPassword,
-        });
 
-        if (!error && data?.user) {
-          const meta = data.user.user_metadata || {};
-          signedIn = {
-            id: data.user.id,
-            email: data.user.email,
-            phone: meta.phone || '',
-            full_name: meta.full_name || identifier.split('@')[0],
-            shipping_address: meta.shipping_address || '',
-          };
+      // 1. Check Supabase profile record (matches what was created on website)
+      const profileKey = isEmail ? cleanEmail.replace(/[^a-z0-9]/g, '_') : cleanPhone;
+      const { data: directProfile } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', `USER_PROFILE_${profileKey}`)
+        .maybeSingle();
+
+      if (directProfile) {
+        let meta = {};
+        try { meta = JSON.parse(directProfile.items || '{}'); } catch (e) {}
+        if (meta.password && meta.password !== authPassword) {
+          Alert.alert('Incorrect Password', 'The password you entered is incorrect. Please try again.');
+          setAuthLoading(false);
+          return;
+        }
+
+        signedIn = {
+          id: directProfile.id,
+          full_name: directProfile.customer_name || meta.full_name || 'Customer',
+          phone: directProfile.customer_phone || meta.phone || (isEmail ? '' : identifier),
+          email: meta.email || (isEmail ? identifier : ''),
+          shipping_address: directProfile.shipping_address || meta.address || '',
+        };
+      }
+
+      // 2. If not found in profile records, check existing customer orders in Supabase
+      if (!signedIn) {
+        const { data: allOrders } = await supabase
+          .from('orders')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (allOrders && allOrders.length > 0) {
+          const matched = allOrders.find((r) => {
+            let meta = {};
+            try { meta = JSON.parse(r.items || '{}'); } catch (e) {}
+            const phoneMatch = cleanPhone && r.customer_phone && r.customer_phone.replace(/\D/g, '').includes(cleanPhone);
+            const emailMatch = isEmail && meta.email && meta.email.toLowerCase() === cleanEmail;
+            return phoneMatch || emailMatch;
+          });
+
+          if (matched) {
+            let meta = {};
+            try { meta = JSON.parse(matched.items || '{}'); } catch (e) {}
+            if (meta.password && meta.password !== authPassword) {
+              Alert.alert('Incorrect Password', 'The password you entered is incorrect. Please try again.');
+              setAuthLoading(false);
+              return;
+            }
+
+            signedIn = {
+              id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+              full_name: matched.customer_name || meta.full_name || 'Customer',
+              phone: matched.customer_phone || (isEmail ? '' : identifier),
+              email: meta.email || (isEmail ? identifier : ''),
+              shipping_address: matched.shipping_address || meta.address || '',
+            };
+          }
         }
       }
 
+      // 3. Fallback seamless login
       if (!signedIn) {
         signedIn = {
-          id: `usr_mob_${Date.now()}`,
-          email: isEmail ? identifier : undefined,
-          phone: !isEmail ? identifier : undefined,
-          full_name: isEmail ? identifier.split('@')[0] : `Customer ${identifier.slice(-4)}`,
+          id: `usr_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+          full_name: isEmail ? identifier.split('@')[0] : `Customer ${cleanPhone.slice(-4)}`,
+          phone: !isEmail ? identifier : '',
+          email: isEmail ? identifier : '',
           shipping_address: '',
         };
+        await saveProfileToSupabase({
+          full_name: signedIn.full_name,
+          phone: signedIn.phone,
+          email: signedIn.email,
+          password: authPassword,
+        });
       }
 
       setCurrentUser(signedIn);
       populateProfileFields(signedIn);
-      fetchUserOrders(signedIn.phone, signedIn.email, signedIn.id);
+      fetchUserOrders(signedIn.phone, signedIn.email);
       setProfileActiveTab('orders');
       Alert.alert('Signed In', `Welcome back, ${signedIn.full_name}!`);
     } catch (err) {
@@ -304,7 +366,10 @@ export default function App() {
 
     setAuthLoading(true);
     try {
-      const newUserId = `usr_mob_${Date.now()}`;
+      const cleanPhone = authPhone.replace(/\D/g, '');
+      const cleanEmail = authEmail.toLowerCase().trim();
+      const newUserId = `USER_PROFILE_${cleanPhone || cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+      
       const newProfile = {
         id: newUserId,
         full_name: authFullName.trim(),
@@ -313,29 +378,20 @@ export default function App() {
         shipping_address: authShippingAddress.trim() || undefined,
       };
 
-      if (authEmail.trim()) {
-        try {
-          await supabase.auth.signUp({
-            email: authEmail.trim(),
-            password: authPassword,
-            options: {
-              data: {
-                full_name: authFullName.trim(),
-                phone: authPhone.trim(),
-                shipping_address: authShippingAddress.trim(),
-              },
-            },
-          });
-        } catch (e) {
-          console.warn('Supabase mobile signup notice:', e);
-        }
-      }
+      // Save to Supabase so website and mobile app share the account
+      await saveProfileToSupabase({
+        full_name: newProfile.full_name || 'Customer',
+        phone: newProfile.phone,
+        email: newProfile.email,
+        shipping_address: newProfile.shipping_address,
+        password: authPassword,
+      });
 
       setCurrentUser(newProfile);
       populateProfileFields(newProfile);
-      fetchUserOrders(newProfile.phone, newProfile.email, newProfile.id);
+      fetchUserOrders(newProfile.phone, newProfile.email);
       setProfileActiveTab('orders');
-      Alert.alert('Account Created', 'Your Deepa Vathulu account is ready!');
+      Alert.alert('Account Created', 'Your Deepa Vathulu account is ready and synced across all devices!');
     } catch (err) {
       Alert.alert('Sign Up Error', err?.message || 'Failed to create account.');
     } finally {
@@ -344,12 +400,7 @@ export default function App() {
   };
 
   // Mobile Auth: Sign Out
-  const handleMobileSignOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (e) {
-      console.warn('Sign out warning:', e);
-    }
+  const handleMobileSignOut = () => {
     setCurrentUser(null);
     setUserOrders([]);
     setCustomerName('');
@@ -375,20 +426,16 @@ export default function App() {
     setCurrentUser(updated);
     populateProfileFields(updated);
 
-    try {
-      await supabase.auth.updateUser({
-        data: {
-          full_name: updated.full_name,
-          phone: updated.phone,
-          shipping_address: updated.shipping_address,
-        },
-      });
-    } catch (e) {
-      console.warn('Update user metadata notice:', e);
-    }
+    // Save to Supabase
+    await saveProfileToSupabase({
+      full_name: updated.full_name || 'Customer',
+      phone: updated.phone,
+      email: updated.email,
+      shipping_address: updated.shipping_address,
+    });
 
     setIsSavingProfile(false);
-    Alert.alert('Profile Updated', 'Your delivery details and profile have been saved.');
+    Alert.alert('Profile Updated', 'Your delivery details and profile have been saved across all devices.');
   };
 
   const addToCart = (product) => {
@@ -467,40 +514,16 @@ export default function App() {
         id: newOrderId,
         customer_name: customerName || currentUser?.full_name || 'Guest Customer',
         customer_phone: customerPhone || currentUser?.phone || 'Not provided',
-        customer_email: currentUser?.email || '',
         shipping_address: shippingAddress || currentUser?.shipping_address || 'Standard Delivery',
         total_amount: totalCartPrice,
         status: 'Pending',
-        payment_status: paymentStatus,
         payment_method: orderMethodLabel,
-        payment_reference: refId,
-        payment_id: refId,
         items: JSON.stringify(cleanItemsArray),
         items_summary: itemsSummary,
-        user_id: currentUser?.id || null,
         created_at: new Date().toISOString(),
       };
 
-      let { error: orderError } = await supabase.from('orders').insert(fullPayload);
-
-      // Fallback retry if optional schema columns throw PGRST204
-      if (orderError && orderError.code === 'PGRST204') {
-        console.warn('Retrying mobile order insert without optional columns:', orderError.message);
-        const safePayload = {
-          id: newOrderId,
-          customer_name: customerName || currentUser?.full_name || 'Guest Customer',
-          customer_phone: customerPhone || currentUser?.phone || 'Not provided',
-          shipping_address: shippingAddress || currentUser?.shipping_address || 'Standard Delivery',
-          total_amount: totalCartPrice,
-          status: 'Pending',
-          items: JSON.stringify(cleanItemsArray),
-          items_summary: itemsSummary,
-          payment_method: paymentMethod === 'razorpay' ? `razorpay (${refId})` : 'Cash on Delivery',
-          created_at: new Date().toISOString(),
-        };
-        const retryRes = await supabase.from('orders').insert(safePayload);
-        orderError = retryRes.error;
-      }
+      const { error: orderError } = await supabase.from('orders').insert(fullPayload);
 
       if (orderError) {
         console.error('Mobile Order Insert Error:', orderError);
@@ -521,7 +544,6 @@ export default function App() {
         id: newOrderId,
         customer_name: customerName || currentUser?.full_name || 'Customer',
         customer_phone: customerPhone || currentUser?.phone,
-        customer_email: currentUser?.email,
         shipping_address: shippingAddress || currentUser?.shipping_address,
         total_amount: totalCartPrice,
         status: 'Pending',
@@ -538,7 +560,7 @@ export default function App() {
       setIsRazorpayOverlayVisible(false);
 
       if (currentUser) {
-        fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id);
+        fetchUserOrders(currentUser.phone, currentUser.email);
       }
 
       Alert.alert(
@@ -608,7 +630,7 @@ export default function App() {
               setIsProfileModalVisible(true);
               if (currentUser) {
                 setProfileActiveTab('orders');
-                fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id);
+                fetchUserOrders(currentUser.phone, currentUser.email);
               } else {
                 setAuthMode('signin');
               }
@@ -859,10 +881,10 @@ export default function App() {
 
                   {authMode === 'signin' ? (
                     <View style={{ marginTop: 10 }}>
-                      <Text style={styles.inputLabel}>Email ID or Mobile Phone *</Text>
+                      <Text style={styles.inputLabel}>Mobile Phone Number or Email *</Text>
                       <TextInput
                         style={styles.formInput}
-                        placeholder="e.g. user@example.com or +91 9876543210"
+                        placeholder="e.g. 8074630135 or user@gmail.com"
                         placeholderTextColor="#9CA3AF"
                         value={authIdentifier}
                         onChangeText={setAuthIdentifier}
@@ -905,7 +927,7 @@ export default function App() {
                       <Text style={styles.inputLabel}>Mobile Phone Number *</Text>
                       <TextInput
                         style={styles.formInput}
-                        placeholder="+91 98765 43210"
+                        placeholder="10-digit phone number"
                         placeholderTextColor="#9CA3AF"
                         keyboardType="phone-pad"
                         value={authPhone}
@@ -936,7 +958,7 @@ export default function App() {
                       <Text style={styles.inputLabel}>Choose Password *</Text>
                       <TextInput
                         style={styles.formInput}
-                        placeholder="Create a secure password"
+                        placeholder="Create a password"
                         placeholderTextColor="#9CA3AF"
                         secureTextEntry
                         value={authPassword}
@@ -1007,8 +1029,8 @@ export default function App() {
                   {profileActiveTab === 'orders' ? (
                     <View style={{ marginTop: 14 }}>
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <Text style={styles.formSectionTitle}>Previous Order History</Text>
-                        <TouchableOpacity onPress={() => fetchUserOrders(currentUser.phone, currentUser.email, currentUser.id)}>
+                        <Text style={styles.formSectionTitle}>Previous Order History ({userOrders.length})</Text>
+                        <TouchableOpacity onPress={() => fetchUserOrders(currentUser.phone, currentUser.email)}>
                           <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '700' }}>↻ Refresh</Text>
                         </TouchableOpacity>
                       </View>
@@ -1016,7 +1038,7 @@ export default function App() {
                       {loadingOrders ? (
                         <View style={{ paddingVertical: 30, alignItems: 'center' }}>
                           <ActivityIndicator color="#D97706" />
-                          <Text style={{ color: '#786654', fontSize: 12, marginTop: 8 }}>Loading previous orders...</Text>
+                          <Text style={{ color: '#786654', fontSize: 12, marginTop: 8 }}>Loading previous orders from Supabase...</Text>
                         </View>
                       ) : userOrders.length === 0 ? (
                         <View style={styles.emptyOrdersCard}>
