@@ -10,8 +10,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Valid amount is required' }, { status: 400 });
     }
 
-    const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TPkwm1YUrt2Sp8';
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || 'PSnOBOvB17ItW7EW0L29Pfg3';
+    const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
     const amountInPaise = Math.round(rawAmount * 100);
 
     try {
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
       id: `order_live_${Date.now()}`,
       amount: amountInPaise,
       currency: 'INR',
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TPkwm1YUrt2Sp8',
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '',
     });
   }
 }

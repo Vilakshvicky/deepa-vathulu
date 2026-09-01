@@ -689,7 +689,7 @@ export default function Home() {
         const razorpayKey =
           orderData?.key ||
           process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ||
-          'rzp_live_TPkwm1YUrt2Sp8';
+          '';
 
         const options: any = {
           key: razorpayKey,
